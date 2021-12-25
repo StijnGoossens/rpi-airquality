@@ -22,7 +22,7 @@ def plot_metric_over_time(df, col):
         alt.Chart(df)
         .mark_line()
         .encode(
-            x=alt.X('date:T', axis = alt.Axis(title = 'Date', format = ("%H %M"))),
+            x=alt.X('date:T', axis = alt.Axis(title = 'time', format = ("%H %M"))),
             y=col
         )
     )
@@ -60,6 +60,7 @@ df = df[df["date"].dt.date == date]
 st.altair_chart(plot_metric_over_time(df, "co2"), use_container_width=True)
 st.altair_chart(plot_metric_over_time(df, "temp"), use_container_width=True)
 st.altair_chart(plot_metric_over_time(df, "hum"), use_container_width=True)
+st.altair_chart(plot_metric_over_time(df, "pressure"), use_container_width=True)
 
 # Raspberry Pi shutdown button.
 if st.button('⚠️ Shutdown Raspberry Pi'):
