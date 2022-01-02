@@ -56,8 +56,11 @@ if __name__ == "__main__":
 
     # Determine the current session id.
     cur.execute('SELECT * FROM sessions LIMIT 1')
-    result = cur.fetchone()
-    session_id = result[0] + 1
+    try:
+        result = cur.fetchone()
+        session_id = result[0] + 1
+    except TypeError:
+        session_id = 0
     cur.execute("INSERT INTO sessions VALUES (?, ? ,?)", (session_id, datetime.datetime.now(), ""))
     con.commit()
 
