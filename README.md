@@ -1,18 +1,36 @@
-# Monitor airquality with Raspberry Pi and a VMA342 (= CCS811 + BME280) and MH-Z19 sensor
+# Airquality monitoring with Raspberry Pi
 
-Outputs per sensor:
-- MH-Z19 -> CO2
-- VMA342:
-    - CCS811 -> TVOC (TODO)
-    - BME280 -> temperature + humidity + air pressure
+In this project, we'll monitor several parameters of indoor airquality with a Raspberry Pi and the following sensors:
+- MH-Z19 -> **CO2**
+- VMA342, consisting of:
+    - BME280 -> **temperature** + **humidity** + **air pressure**
+    - CCS811 -> volatile organic compounds (**TVOC**) [Work in progress]
 
-At the end of this project you will be able to observe key air quality parameters (CO2, temperature and humidity) as well as their evolution over time:
+<img src="images/rpi-and-sensors.jpg" height="500" />
+<br/><br/>
+A Streamlit dashboard will allow you to monitor the current air quality as well as the evolution over time:
 <table>
     <tr>
-        <td><img src="images/dashboard_example_1.png" height="600" /></td>
-        <td><img src="images/dashboard_example_2.png" height="600" /></td>
+        <td><img src="images/dashboard_example_1.png" height="600"/></td>
+        <td><img src="images/dashboard_example_2.png" height="600"/></td>
     </tr>
 </table>
+
+## Requirements
+- Raspberry Pi<sup>*</sup>, including:
+    - MicroSD card
+    - Micro USB power cable and adapter
+    - Protective case
+    - WiFi dongle (for RPi's older than model 3)
+- [VMA342 sensor](https://www.velleman.eu/products/view?id=450324)
+- [MH-Z19 sensor](https://www.hobbyelectronica.nl/product/mh-z19b-co2-sensor/)<sup>**</sup>
+- Small breadboard
+- Jumper cables (male-female)
+- Ethernet cable for the initial setup
+
+<sup>*</sup>I used a Raspberry Pi model 2B for this project. Other models likely work as well, but weren't tested.
+
+<sup>**</sup>The MH-Z19 sensor comes in [multiple versions](https://emariete.com/en/sensor-co2-mh-z19b/). I used the MH-Z19B. The [mh-z19 python library](https://pypi.org/project/mh-z19/) seems to support at least the MH-Z19 and MH-Z19B. If your sensor doesn't come with output pins (like mine), you'll have to solder some stacking headers yourself.
 
 ## General Raspberry Pi setup
 
@@ -48,15 +66,72 @@ network={
 3. Check the WiFi connection: `ifconfig wlan0` An IP address should be visible if the connection was successful.
 
 
+## Wiring the hardware
+
+Connect the Raspberry Pi and MH-Z19 as follows:
+<table>
+    <tr>
+        <th>RPi</th>
+        <th>MH-Z19</th>
+    </tr>
+    <tr>
+        <td>5V</td>
+        <td>Vin</td>
+    </tr>
+    <tr>
+        <td>GND</td>
+        <td>GND</td>
+    </tr>
+    <tr>
+        <td>TXD</td>
+        <td>Rx</td>
+    </tr>
+    <tr>
+        <td>RXD</td>
+        <td>Tx</td>
+    </tr>
+</table>
+
+Note how the TXD and RXD are cross connected between the RPi and MH-Z19.
+
+Connect the Raspberry Pi and VMA342 as follows:
+<table>
+    <tr>
+        <th>RPi</th>
+        <th>VMA342</th>
+    </tr>
+    <tr>
+        <td>3V3</td>
+        <td>3.3V</td>
+    </tr>
+    <tr>
+        <td>GND</td>
+        <td>GND</td>
+    </tr>
+    <tr>
+        <td>SDA</td>
+        <td>SDA</td>
+    </tr>
+    <tr>
+        <td>SCL</td>
+        <td>SCL</td>
+    </tr>
+    <tr>
+        <td>GND</td>
+        <td>WAKE</td>
+    </tr>
+</table>
+
+<img src="images/electrical-connection-scheme.png" height="600" />
+
 ## Project specific setup
-Install the packages below in order to be able to interact with the sensors:
+Install the packages below in order to interact with the sensors:
 
 ### MH-Z19 (CO2)
 
 - Enable Serial via `sudo raspi-config` ([source](https://github.com/UedaTakeyuki/mh-z19/wiki/How-to-Enable-Serial-Port-hardware-on-the-Raspberry-Pi))
 
 - Install the [mh-z19 package](https://pypi.org/project/mh-z19/) with `sudo pip install mh-z19`
-
 
 
 ### VMA342
@@ -100,7 +175,8 @@ print(data)
 ```
 
 #### CCS811 (TVOC + eCO2)
-*⚠️ STILL WIP. A BUG OCCURS WHEN READING OUT THE TVOC (and eCO2) VALUES ⚠️*
+*⚠️ STILL WIP. A BUG OCCURS WHEN READING OUT THE TVOC (and eCO2) VALUES*
+
 [datasheet](https://cdn.sparkfun.com/assets/learn_tutorials/1/4/3/CCS811_Datasheet-DS000459.pdf)
 
 - `pip3 install adafruit-circuitpython-ccs811`
@@ -141,8 +217,6 @@ This will start the monitoring script and Streamlit dashboard on startup. Logs w
 Note that in order to streamlit to work from the cron job, the second statement adds the streamlit path to `$PATH`. This streamlit path can be found by running `which streamlit`. Which returns something like `/home/pi/.local/bin/streamlit`. Addapt the above line accordingly. The reason is that in cron, PATH is restricted to `/bin:/usr/bin` ([source](https://serverfault.com/questions/449651/why-is-my-crontab-not-working-and-how-can-i-troubleshoot-it)).
 
 Extra: to make sure that the cron jobs have run, you can use the following command: `grep CRON /var/log/syslog`
-
-## Hardware
 
 
 ## View dashboard
