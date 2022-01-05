@@ -1,13 +1,13 @@
-# Airquality monitoring with Raspberry Pi
+# Air quality monitoring with Raspberry Pi
 
-In this project, we'll monitor several parameters of indoor airquality with a Raspberry Pi and the following sensors:
+In this project, we'll monitor several parameters of indoor air quality with a Raspberry Pi and the following sensors:
 - MH-Z19 -> **CO2**
 - VMA342, consisting of:
     - BME280 -> **temperature** + **humidity** + **air pressure**
     - CCS811 -> volatile organic compounds (**TVOC**) [Work in progress]
 
 <img src="images/rpi-and-sensors.jpg" height="500" />
-<br/><br/>
+<br/>
 A Streamlit dashboard will allow you to monitor the current air quality as well as the evolution over time:
 <table>
     <tr>
@@ -209,8 +209,8 @@ Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default 
 - `chmod 664 ~/Documents/airmon/monitor.py`
 -  Run `crontab -e` and append the following command to the bottom of the file:
 ```
-@reboot (/bin/sleep 30; sudo python3 /home/pi/Documents/rpi-airquality/monitor.py > /home/pi/cronjoblog-monitor 2>&1)
-@reboot (/bin/sleep 30; export PATH=$PATH:/home/pi/.local/bin; streamlit run /home/pi/Documents/rpi-airquality/dashboard.py > /home/pi/cronjoblog-dashboard 2>&1)
+@reboot (/bin/sleep 30; sudo python3 /home/pi/Documents/rpi-airquality/src/monitor.py > /home/pi/cronjoblog-monitor 2>&1)
+@reboot (/bin/sleep 30; export PATH=$PATH:/home/pi/.local/bin; streamlit run /home/pi/Documents/rpi-airquality/src/dashboard.py > /home/pi/cronjoblog-dashboard 2>&1)
 ```
 This will start the monitoring script and Streamlit dashboard on startup. Logs will be printed to the specified files in the `/home/pi/` folder.
 
