@@ -125,7 +125,11 @@ Connect the Raspberry Pi and VMA342 as follows:
 <img src="images/electrical-connection-scheme.png" height="600" />
 
 ## Project specific setup
-Install the packages below in order to interact with the sensors:
+Clone this repository in the Documents folder:
+`cd Documents`
+`git clone https://github.com/StijnGoossens/rpi-airquality.git`
+
+Subsequently, install the packages below in order to interact with the sensors.
 
 ### MH-Z19 (CO2)
 
@@ -140,7 +144,7 @@ Install the packages below in order to interact with the sensors:
 - Install RPi.GPIO with `export CFLAGS=-fcommon` and `pip3 install RPi.GPIO` ([source](https://raspberrypi.stackexchange.com/questions/119632/ubuntu-20-10-and-gpio))
 - Enable I2C via `sudo raspi-config` ([source](https://raspberrypi.stackexchange.com/questions/66145/raspberry-pi-3-not-detecting-i2c-device))
 - Optionally adding the I2C module to the kernel: `sudo nano /etc/modules` and add `i2c-dev` to the end of the file.
-- Reduce the baudrate in order to make the sensor compatible with Raspberry Pi: `sudo nano /boot/config.txt and add dtparam=i2c_arm_baudrate=10000 (source)`
+- Reduce the baudrate in order to make the sensor compatible with Raspberry Pi: `sudo nano /boot/config.txt` and add `dtparam=i2c_arm_baudrate=10000` ([source](https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/i2c-clock-stretching)).
 
 Tip: `i2cdetect -y 1` shows the current I2C connections.
 
@@ -200,13 +204,13 @@ while True:
 Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default is `0x5a`](https://github.com/adafruit/Adafruit_CircuitPython_CCS811/blob/main/adafruit_ccs811.py)).
 
 ### Streamlit
-- `pip install streamlit=0.62.0` ([Installing Streamlit>0.62 on Raspberry Pi isn't straightforward because of dependency on PyArrow](https://discuss.streamlit.io/t/raspberry-pi-streamlit/2900/6))
+- `pip install streamlit==0.62.0` ([Installing Streamlit>0.62 on Raspberry Pi isn't straightforward because of dependency on PyArrow](https://discuss.streamlit.io/t/raspberry-pi-streamlit/2900/6))
 - `pip install numpy==1.20`
 - `sudo apt-get install libatlas-base-dev`
 - `export PATH="$HOME/.local/bin:$PATH"` ([source](https://discuss.streamlit.io/t/command-not-found/741/7))
 
 ### Automatically run the scripts on startup
-- `chmod 664 ~/Documents/airmon/monitor.py`
+- `chmod 664 ~/Documents/rpi-airquality/src/monitor.pypi`
 -  Run `crontab -e` and append the following command to the bottom of the file:
 ```
 @reboot (/bin/sleep 30; sudo python3 /home/pi/Documents/rpi-airquality/src/monitor.py > /home/pi/cronjoblog-monitor 2>&1)
