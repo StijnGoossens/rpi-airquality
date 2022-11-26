@@ -211,8 +211,10 @@ Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default 
 ```
 @reboot (/bin/sleep 30; sudo python3 /home/pi/Documents/rpi-airquality/src/monitor.py > /home/pi/cronjoblog-monitor 2>&1)
 @reboot (/bin/sleep 30; export PATH=$PATH:/home/pi/.local/bin; streamlit run /home/pi/Documents/rpi-airquality/src/dashboard.py > /home/pi/cronjoblog-dashboard 2>&1)
+*/5 * * * * /bin/ping -c 2 www.google.com > /home/pi/cronjoblog-ping.txt 2>&1
 ```
 This will start the monitoring script and Streamlit dashboard on startup. Logs will be printed to the specified files in the `/home/pi/` folder.
+The third command will ping every five minutes in order to prevent the Raspberry Pi from losing internet connection ((source)[https://forums.raspberrypi.com/viewtopic.php?t=274966]).
 
 Note that in order to streamlit to work from the cron job, the second statement adds the streamlit path to `$PATH`. This streamlit path can be found by running `which streamlit`. Which returns something like `/home/pi/.local/bin/streamlit`. Addapt the above line accordingly. The reason is that in cron, PATH is restricted to `/bin:/usr/bin` ([source](https://serverfault.com/questions/449651/why-is-my-crontab-not-working-and-how-can-i-troubleshoot-it)).
 
