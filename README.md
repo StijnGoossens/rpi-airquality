@@ -218,12 +218,29 @@ Note that in order to streamlit to work from the cron job, the second statement 
 
 Extra: to make sure that the cron jobs have run, you can use the following command: `grep CRON /var/log/syslog`
 
+### Turn of the LED's of the Raspberry Pi (optional)
+**Raspberry Pi 3**
+- Run `crontab -e` and append the following command to the bottom of the file ([source](https://forums.raspberrypi.com/viewtopic.php?t=149126#p1306079)):
+```
+@reboot (/bin/sleep 30; sudo sh -c 'echo 0 > /sys/class/leds/led0/brightness')
+@reboot (/bin/sleep 30; sudo sh -c 'echo 0 > /sys/class/leds/led1/brightness')
+```
+
+**Raspberry Pi 4**
+- `sudo nano /boot/config.txt`
+- Add the following lines below the `[Pi4]` settings ([source](https://forums.raspberrypi.com/viewtopic.php?t=252049)):
+```
+# Disable the PWR LED
+dtparam=pwr_led_trigger=none
+dtparam=pwr_led_activelow=off
+# Disable the Activity LED
+dtparam=act_led_trigger=none
+dtparam=act_led_activelow=off
+# Disable ethernet port LEDs
+dtparam=eth_led0=4
+dtparam=eth_led1=4
+```
+- The lights will turn off once the Raspberry Pi has been restarted.
 
 ## View dashboard
-The Streamlit dashboard can be viewed from any device connected to the local network. Find out the IP address of the dashboard by viewing the log files of the dashboard script (`nano /home/pi/cronjoblog-dashboard`). In there, you should see some output like below. The network URL is what you need.
-```
-You can now view your Streamlit app in your browser.
-
-Network URL: http://192.168.0.247:8501
-External URL: http://81.82.78.41:8501
-```
+The Streamlit dashboard can be viewed from any device connected to the local network at the following address: [http://raspberrypi.local:8501/](http://raspberrypi.local:8501/)
