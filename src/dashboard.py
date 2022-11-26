@@ -10,12 +10,12 @@ from utils import utc_to_be
 # Connect to the database and load the 10080 most recent records, i.e., with one sample per minute,
 # equal to the past week (=60*24*7).
 con = sqlite3.connect(DB_PATH)
-df = pd.read_sql_query("SELECT * FROM records LIMIT 10080", con)
+df = pd.read_sql_query("SELECT * FROM records ORDER BY date DESC LIMIT 10080", con)
 # Transform the date to a localised datetime.
 df['date'] = pd.to_datetime(df['date'])
 df["date"] = df["date"].dt.tz_localize("utc")
-# Get the last record for the current air quality.
-last_record = df.iloc[-1]
+# Get the first record for the current air quality.
+last_record = df.iloc[0]
 
 def plot_metric_over_time(df, col):
     return (
