@@ -13,7 +13,7 @@ con = sqlite3.connect(DB_PATH)
 df = pd.read_sql_query("SELECT * FROM records ORDER BY date DESC LIMIT 10080", con)
 # Transform the date to a localised datetime.
 df['date'] = pd.to_datetime(df['date'])
-df["date"] = df["date"].dt.tz_localize("utc")
+df["date"] = df["date"].dt.tz_localize("Europe/Brussels")
 # Get the first record for the current air quality.
 last_record = df.iloc[0]
 
@@ -26,6 +26,9 @@ def plot_metric_over_time(df, col):
             y=col
         )
     )
+
+# def set_room():
+#     print(room)
 
 #### DEFINE THE STREAMLIT APP ####
 
@@ -44,7 +47,8 @@ st.markdown(
 
 # The current metrics.
 st.markdown(f"# Current air quality")
-st.text(f"🗓 {utc_to_be(last_record['date']).strftime('%d-%m-%Y %H:%M')}")
+st.text(f"🗓 {last_record['date'].strftime('%d-%m-%Y %H:%M')}")
+# room = st.text_input("Room", on_change=set_room)
 co2_alert = "🚨" if last_record['co2'] > 900 else ""
 st.markdown(f"## {last_record['co2']:.0f} ppm {co2_alert}")
 st.text("😶‍🌫️ CO2 level")
@@ -57,6 +61,7 @@ st.text("💧 Humidity")
 st.markdown(f"# Air quality evolution")
 date = st.date_input("Day of interest", datetime.datetime.now())
 df = df[df["date"].dt.date == date]
+# events = st.text_area("Events")
 st.altair_chart(plot_metric_over_time(df, "co2"), use_container_width=True)
 st.altair_chart(plot_metric_over_time(df, "temp"), use_container_width=True)
 st.altair_chart(plot_metric_over_time(df, "hum"), use_container_width=True)

@@ -209,6 +209,12 @@ Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default 
 - `sudo apt-get install libatlas-base-dev`
 - `export PATH="$HOME/.local/bin:$PATH"` ([source](https://discuss.streamlit.io/t/command-not-found/741/7))
 
+**Optional**
+
+For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error might occur after a running the Streamlit dashboard for a while. This can be resolved by increasing making the following changes to the Streamlit configuration:
+- Change the `MESSAGE_SIZE_LIMIT` parameter in `site-packages\streamlit\server\server_util.py` from `50 * 1e6` to `600 * 1e6`.
+- Change the `websocket_ping_timeout` parameter in `site-packages\streamlit\server\Server.py` from `60` to `200`.
+
 ### Automatically run the scripts on startup
 - `chmod 664 ~/Documents/rpi-airquality/src/monitor.pypi`
 -  Run `crontab -e` and append the following command to the bottom of the file:
@@ -249,4 +255,9 @@ dtparam=eth_led1=4
 - The lights will turn off once the Raspberry Pi has been restarted.
 
 ## View dashboard
-The Streamlit dashboard can be viewed from any device connected to the local network at the following address: [http://raspberrypi.local:8501/](http://raspberrypi.local:8501/)
+The Streamlit dashboard can be viewed from any device connected to the local network. Find out the IP address of the dashboard by viewing the log files of the dashboard script (`nano /home/pi/cronjoblog-dashboard`). In there, you should see some output like below. The network URL is what you need. [http://raspberrypi.local:8501/](http://raspberrypi.local:8501/) might also work.
+```
+You can now view your Streamlit app in your browser.
+Network URL: http://192.168.0.247:8501
+External URL: http://81.82.78.41:8501
+```
