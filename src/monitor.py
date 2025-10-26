@@ -1,10 +1,15 @@
-import mh_z19
-import time
-import sqlite3
 import datetime
-import smbus2
+import sqlite3
+import time
+
 import bme280
+import mh_z19
+import smbus2
+
 from config import DB_PATH
+
+POLL_FREQUENCY_SECONDS = 300
+
 
 def read_mhz19():
     try:
@@ -28,7 +33,9 @@ def init_bme280():
 
 def read_bme280(params):
     try:
-        data = bme280.sample(params["bus"], params["address"], params["calibration_params"])
+        data = bme280.sample(
+            params["bus"], params["address"], params["calibration_params"]
+        )
         temp = data.temperature
         hum = data.humidity
         pressure = data.pressure
@@ -47,26 +54,34 @@ def create_table(sql_query):
         # The table already exists.
         pass
 
+
 if __name__ == "__main__":
     # Connect to the database and create thee tables if they don't exist yet.
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    create_table('''CREATE TABLE records (date timestamp, co2 integer, voc real, eco2 real, temp real, hum real, pressure real, session_id integer)''')
-    create_table('''CREATE TABLE sessions (session_id integer, start_date timestamp, location text)''')
+    create_table(
+        """CREATE TABLE records (date timestamp, co2 integer, voc real, eco2 real, temp real, hum real, pressure real, session_id integer)"""
+    )
+    create_table(
+        """CREATE TABLE sessions (session_id integer, start_date timestamp, location text)"""
+    )
 
     # Determine the current session id.
-    cur.execute('SELECT * FROM sessions LIMIT 1')
+    cur.execute("SELECT * FROM sessions LIMIT 1")
     try:
         result = cur.fetchone()
         session_id = result[0] + 1
     except TypeError:
         session_id = 0
-    cur.execute("INSERT INTO sessions VALUES (?, ? ,?)", (session_id, datetime.datetime.now(), ""))
+    cur.execute(
+        "INSERT INTO sessions VALUES (?, ? ,?)",
+        (session_id, datetime.datetime.now(), ""),
+    )
     con.commit()
 
     # Initialise sensors.
     bme280_params = init_bme280()
-    
+
     # Take measurements every minute.
     while True:
         now = datetime.datetime.now()
@@ -77,8 +92,11 @@ if __name__ == "__main__":
         print(temp, hum, pressure)
 
         # Add measurements to database.
-        cur.execute("INSERT INTO records VALUES (?, ? ,? ,?, ?, ?, ?, ?)", (now, co2, None, None, temp, hum, pressure, session_id))
+        cur.execute(
+            "INSERT INTO records VALUES (?, ? ,? ,?, ?, ?, ?, ?)",
+            (now, co2, None, None, temp, hum, pressure, session_id),
+        )
         con.commit()
-        time.sleep(60)
+        time.sleep(POLL_FREQUENCY_SECONDS)
 
     con.close()
