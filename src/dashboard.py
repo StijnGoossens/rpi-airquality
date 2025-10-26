@@ -1,3 +1,4 @@
+import base64
 import datetime
 import sqlite3
 from subprocess import call
@@ -15,18 +16,38 @@ if not hasattr(np, "object"):
 if not hasattr(np, "bool"):
     np.bool = bool  # type: ignore[attr-defined,assignment]
 
-# Connect to the database and load the 10080 most recent records, i.e., with one sample per minute,
-# equal to the past week (=60*24*7).
-con = sqlite3.connect(DB_PATH)
-df = pd.read_sql_query("SELECT * FROM records ORDER BY date DESC LIMIT 10080", con)
-# Transform the date to a localised datetime.
-df["date"] = pd.to_datetime(df["date"])
-df["date"] = df["date"].dt.tz_localize("Europe/Brussels")
-# Ensure numeric columns are floats; SQLite nulls otherwise promote dtype=object.
-numeric_columns = [c for c in df.columns if c != "date"]
-df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors="coerce")
-# Get the first record for the current air quality.
-last_record = df.iloc[0]
+
+def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    df["date"] = pd.to_datetime(df["date"])
+    if df["date"].dt.tz is None:
+        df["date"] = df["date"].dt.tz_localize("Europe/Brussels")
+    else:
+        df["date"] = df["date"].dt.tz_convert("Europe/Brussels")
+
+    numeric_columns = [c for c in df.columns if c != "date"]
+    df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors="coerce")
+    return df
+
+
+def load_records(limit: int | None = 10080) -> pd.DataFrame:
+    query = "SELECT * FROM records ORDER BY date DESC"
+    if limit is not None:
+        query += f" LIMIT {limit}"
+    with sqlite3.connect(DB_PATH) as con:
+        df = pd.read_sql_query(query, con)
+    return _normalize_dataframe(df).sort_values("date")
+
+
+df = load_records(limit=10080)
+
+if df.empty:
+    st.warning("No measurements have been recorded yet.")
+    st.stop()
+
+last_record = df.iloc[-1]
 
 
 def plot_metric_over_time(df, col):
@@ -84,6 +105,24 @@ else:
         plot_metric_over_time(filtered_df, "pressure"), use_container_width=True
     )
 
+# Data export.
+st.markdown("### Export measurements")
+if st.button("⬇️ Prepare complete CSV download"):
+    full_df = load_records(limit=None)
+    if full_df.empty:
+        st.info("No data available yet to download.")
+    else:
+        csv_bytes = full_df.to_csv(index=False).encode("utf-8")
+        csv_b64 = base64.b64encode(csv_bytes).decode()
+        st.markdown(
+            f'<a href="data:text/csv;base64,{csv_b64}" download="airquality_full_history.csv">'
+            "Download airquality_full_history.csv</a>",
+            unsafe_allow_html=True,
+        )
+else:
+    st.write("Press the button to prepare the download link.")
+
 # Raspberry Pi shutdown button.
+st.markdown("### Shutdown Raspberry Pi")
 if st.button("⚠️ Shutdown Raspberry Pi"):
     call("sudo shutdown -h now", shell=True)
