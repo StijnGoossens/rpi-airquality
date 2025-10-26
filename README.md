@@ -204,16 +204,16 @@ Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default 
 
 **Optional**
 
-For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error might occur after a running the Streamlit dashboard for a while. This can be resolved by increasing making the following changes to the Streamlit configuration:
-- Change the `MESSAGE_SIZE_LIMIT` parameter in `site-packages\streamlit\server\server_util.py` from `50 * 1e6` to `600 * 1e6`.
-- Change the `websocket_ping_timeout` parameter in `site-packages\streamlit\server\Server.py` from `60` to `200`.
+For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error might occur after a running the Streamlit dashboard for a while. This can be resolved by editing the files inside your virtual environment (e.g. `~/venvs/airquality/lib/python3.13/site-packages/streamlit/server/…`):
+- Change `MESSAGE_SIZE_LIMIT` in `server_util.py` from `50 * 1e6` to `600 * 1e6`.
+- Change the `websocket_ping_timeout` parameter in `Server.py` from `60` to `200`.
 
 ### Automatically run the scripts on startup
 - `chmod 664 ~/Documents/rpi-airquality/src/monitor.py`
 -  Run `crontab -e` and append the following command to the bottom of the file:
 ```
 @reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/python $HOME/Documents/rpi-airquality/src/monitor.py > $HOME/cronjoblog-monitor 2>&1)
-@reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 8501 > $HOME/cronjoblog-dashboard 2>&1)
+@reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 4202 > $HOME/cronjoblog-dashboard 2>&1)
 */5 * * * * /bin/ping -c 2 www.google.com > $HOME/cronjoblog-ping.txt 2>&1
 ```
 This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder.
@@ -247,9 +247,4 @@ dtparam=eth_led1=4
 - The lights will turn off once the Raspberry Pi has been restarted.
 
 ## View dashboard
-The Streamlit dashboard can be viewed from any device connected to the local network. Find out the IP address of the dashboard by viewing the log files of the dashboard script (`nano $HOME/cronjoblog-dashboard`). In there, you should see some output like below. The network URL is what you need. [http://raspberrypi.local:8501/](http://raspberrypi.local:8501/) might also work.
-```
-You can now view your Streamlit app in your browser.
-Network URL: http://192.168.0.247:8501
-External URL: http://81.82.78.41:8501
-```
+The Streamlit dashboard can be viewed from any device on the same network by visiting http://raspberrypi.local:4202/ (or http://<pi-ip>:4202/ if mDNS isn’t available).
