@@ -36,35 +36,12 @@ A Streamlit dashboard will allow you to monitor the current air quality as well 
 
 ### Install OS and activate SSH
 1. Install [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
-2. Insert micro SD card and install the Raspberry Pi OS using Raspberry Pi Imager.
-3. Add “SSH” File to the SD Card Root (`touch /Volumes/boot/ssh`).
-4. Insert the SD card, connect your computer and Pi with an ethernet cable and boot the Pi by plugging in the power cord.
-5. Connect with the Pi via SSH: `ssh pi@raspberrypi.local`, default password = `raspberry`.
-
-### Connect the RPi to WiFi
-
-The following steps will allow you to SSH into your Raspberry Pi over Wifi instead of over ethernet.
-
-1. On the Pi, edit the `wpa_supplicant.conf` file by adding your Wifi networks ssid and password as shown below:
-
-`sudo nano /etc/wpa_supplicant/wpa_supplicant.conf`
-
-Add the following content:
-
-```
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=be                                           
-
-network={
-    ssid="my-ssid"
-    psk="my-password"
-}
-```
-
-2. `sudo reboot`
-3. Check the WiFi connection: `ifconfig wlan0` An IP address should be visible if the connection was successful.
-
+2. Insert micro SD card and install the Raspberry Pi OS using Raspberry Pi Imager. Before starting the instalation process, select "Edit Settings" when asked to customize the OS image. In the settings menu, make sure to:
+    - Set your host name, username and password (for this guide, we assume `raspberrypi.local`, `pi` and `raspberry` respectively)
+    - Enable SSH (with password authentication)
+    - Configure Wifi
+3. Insert the SD card and boot your Raspberry Pi by plugging in the power cord. Give it a few minutes to complete the setup.
+4. Connect with the Pi via your terminal: `ssh pi@raspberrypi.local`, default password = `raspberry`.
 
 ## Wiring the hardware
 
@@ -134,23 +111,38 @@ Subsequently, install the packages below in order to interact with the sensors.
 ### MH-Z19 (CO2)
 
 - Enable Serial via `sudo raspi-config` ([source](https://github.com/UedaTakeyuki/mh-z19/wiki/How-to-Enable-Serial-Port-hardware-on-the-Raspberry-Pi))
+- Grant your user access to the serial device so `mh-z19` can read `/dev/serial0`: `sudo adduser $USER dialout` (log out and back in afterward).
 
-- Install the [mh-z19 package](https://pypi.org/project/mh-z19/) with `sudo pip install mh-z19`
+- Install SWIG once so the `lgpio` dependency can build: `sudo apt install swig`
+- Install the native GPIO library used at link time: `sudo apt install liblgpio-dev`
+- Install core scientific packages via apt so Python wheels do not need to compile from source on the Raspberry Pi:
+    - `sudo apt install python3-numpy python3-pandas python3-dev libopenblas-dev liblapack-dev gfortran`
+    - On older Raspberry Pi OS releases (Bullseye/Bookworm) you can install `libatlas-base-dev` instead of `libopenblas-dev liblapack-dev`.
 
+- Install the [mh-z19 package](https://pypi.org/project/mh-z19/) inside a Python virtual environment to avoid Raspberry Pi OS's system package guard:
+
+```bash
+python3 -m venv --system-site-packages ~/venvs/airquality
+source ~/venvs/airquality/bin/activate
+pip install --upgrade pip
+pip install mh-z19
+```
+
+Re-activate the environment (`source ~/venvs/airquality/bin/activate`) before running the project or installing additional Python packages. Using `--system-site-packages` lets the virtual environment reuse Python packages installed via `apt` (e.g. `python3-numpy`) so they do not need to be rebuilt from source.
 
 ### VMA342
 #### General
-- `pip install wheel` (not sure whether really required)
+- The commands below assume the virtual environment from the MH-Z19 section is active.
 - Install RPi.GPIO with `export CFLAGS=-fcommon` and `pip3 install RPi.GPIO` ([source](https://raspberrypi.stackexchange.com/questions/119632/ubuntu-20-10-and-gpio))
-- Enable I2C via `sudo raspi-config` ([source](https://raspberrypi.stackexchange.com/questions/66145/raspberry-pi-3-not-detecting-i2c-device))
+- Enable I2C via `sudo raspi-config` ([source](https://raspberrypi.stackexchange.com/questions/66145/raspberry-pi-3-not-detecting-i2c-device)): `Interface Options -> I2C -> Yes`
 - Optionally adding the I2C module to the kernel: `sudo nano /etc/modules` and add `i2c-dev` to the end of the file.
-- Reduce the baudrate in order to make the sensor compatible with Raspberry Pi: `sudo nano /boot/config.txt` and add `dtparam=i2c_arm_baudrate=10000` ([source](https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/i2c-clock-stretching)).
+- Reduce the baudrate in order to make the sensor compatible with Raspberry Pi: `sudo nano /boot/firmware/config.txt` and add `dtparam=i2c_arm_baudrate=10000` ([source](https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/i2c-clock-stretching)).
 
 Tip: `i2cdetect -y 1` shows the current I2C connections.
 
 #### BME280 (temperature + humidity + air pressure)
 
-- `sudo pip install RPi.bme280`
+- Ensure the virtual environment is active, then run `pip install RPi.bme280`
 
 Example to try out the CCS811 library:
 ```python
@@ -205,9 +197,10 @@ Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default 
 
 ### Streamlit
 - `pip install streamlit==0.62.0` ([Installing Streamlit>0.62 on Raspberry Pi isn't straightforward because of dependency on PyArrow](https://discuss.streamlit.io/t/raspberry-pi-streamlit/2900/6))
-- `pip install numpy==1.20`
-- `sudo apt-get install libatlas-base-dev`
-- `export PATH="$HOME/.local/bin:$PATH"` ([source](https://discuss.streamlit.io/t/command-not-found/741/7))
+- `pip install "click<8"` (Streamlit 0.62 expects Click 7.x; Debian's Click 8.x causes `AttributeError: module 'click' has no attribute 'get_os_args'`)
+- Python 3.12+ requires Streamlit's WebSocket message size limit to be an integer. After installing Streamlit, edit `$HOME/venvs/airquality/lib/python3.13/site-packages/streamlit/server/server_util.py` and change `MESSAGE_SIZE_LIMIT = 50 * 1e6` to `MESSAGE_SIZE_LIMIT = int(50 * 1e6)` (or `50 * 1_000_000`).
+- Bind Streamlit to all interfaces so other devices on your LAN can reach it: run `streamlit run src/dashboard.py --server.address 0.0.0.0 --server.port 8501` (or set the same values in `~/.streamlit/config.toml`).
+- If you install Streamlit outside the virtual environment (e.g. with `pip install --user`), add your local bin directory to `PATH` so the `streamlit` command is found: `export PATH="$HOME/.local/bin:$PATH"` ([source](https://discuss.streamlit.io/t/command-not-found/741/7)). When using the virtual environment described above, the `streamlit` binary is already on `PATH` after `source ~/venvs/airquality/bin/activate`.
 
 **Optional**
 
@@ -216,19 +209,18 @@ For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error m
 - Change the `websocket_ping_timeout` parameter in `site-packages\streamlit\server\Server.py` from `60` to `200`.
 
 ### Automatically run the scripts on startup
-- `chmod 664 ~/Documents/rpi-airquality/src/monitor.pypi`
+- `chmod 664 ~/Documents/rpi-airquality/src/monitor.py`
 -  Run `crontab -e` and append the following command to the bottom of the file:
 ```
-@reboot (/bin/sleep 30; sudo python3 /home/pi/Documents/rpi-airquality/src/monitor.py > /home/pi/cronjoblog-monitor 2>&1)
-@reboot (/bin/sleep 30; export PATH=$PATH:/home/pi/.local/bin; streamlit run /home/pi/Documents/rpi-airquality/src/dashboard.py > /home/pi/cronjoblog-dashboard 2>&1)
-*/5 * * * * /bin/ping -c 2 www.google.com > /home/pi/cronjoblog-ping.txt 2>&1
+@reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/python $HOME/Documents/rpi-airquality/src/monitor.py > $HOME/cronjoblog-monitor 2>&1)
+@reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 8501 > $HOME/cronjoblog-dashboard 2>&1)
+*/5 * * * * /bin/ping -c 2 www.google.com > $HOME/cronjoblog-ping.txt 2>&1
 ```
-This will start the monitoring script and Streamlit dashboard on startup. Logs will be printed to the specified files in the `/home/pi/` folder.
-The third command will ping every five minutes in order to prevent the Raspberry Pi from losing internet connection ((source)[https://forums.raspberrypi.com/viewtopic.php?t=274966]).
+This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder.
 
-Note that in order to streamlit to work from the cron job, the second statement adds the streamlit path to `$PATH`. This streamlit path can be found by running `which streamlit`. Which returns something like `/home/pi/.local/bin/streamlit`. Addapt the above line accordingly. The reason is that in cron, PATH is restricted to `/bin:/usr/bin` ([source](https://serverfault.com/questions/449651/why-is-my-crontab-not-working-and-how-can-i-troubleshoot-it)).
+Note that these commands call the interpreter and Streamlit executable directly from the virtual environment so no extra PATH changes are required. If your virtual environment lives elsewhere, update the paths accordingly. Cron runs with a minimal PATH (`/bin:/usr/bin`), so absolute paths (or environment variables such as `$HOME`) avoid command-not-found errors ([source](https://serverfault.com/questions/449651/why-is-my-crontab-not-working-and-how-can-i-troubleshoot-it)).
 
-Extra: to make sure that the cron jobs have run, you can use the following command: `grep CRON /var/log/syslog`
+Extra: to confirm the cron jobs have run, use the system journal on recent Raspberry Pi OS releases: `sudo journalctl -u cron --since "10 minutes ago"`. On older setups that still log to `/var/log/syslog`, `grep CRON /var/log/syslog` remains an option. Tail the log files with `tail -F $HOME/cronjoblog-monitor` and `tail -F $HOME/cronjoblog-dashboard`.
 
 ### Turn of the LED's of the Raspberry Pi (optional)
 **Raspberry Pi 3**
@@ -255,7 +247,7 @@ dtparam=eth_led1=4
 - The lights will turn off once the Raspberry Pi has been restarted.
 
 ## View dashboard
-The Streamlit dashboard can be viewed from any device connected to the local network. Find out the IP address of the dashboard by viewing the log files of the dashboard script (`nano /home/pi/cronjoblog-dashboard`). In there, you should see some output like below. The network URL is what you need. [http://raspberrypi.local:8501/](http://raspberrypi.local:8501/) might also work.
+The Streamlit dashboard can be viewed from any device connected to the local network. Find out the IP address of the dashboard by viewing the log files of the dashboard script (`nano $HOME/cronjoblog-dashboard`). In there, you should see some output like below. The network URL is what you need. [http://raspberrypi.local:8501/](http://raspberrypi.local:8501/) might also work.
 ```
 You can now view your Streamlit app in your browser.
 Network URL: http://192.168.0.247:8501
