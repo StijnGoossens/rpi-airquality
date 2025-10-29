@@ -5,6 +5,7 @@ In this project, we'll monitor several parameters of indoor air quality with a R
 - VMA342, consisting of:
     - BME280 -> **temperature** + **humidity** + **air pressure**
     - CCS811 -> volatile organic compounds (**TVOC**) [Work in progress]
+- SPS30 -> particulate matter (**PM1.0**, **PM2.5**, **PM4**, **PM10**)
 
 <img src="images/rpi-and-sensors.jpg" height="500" />
 <br/>
@@ -24,8 +25,9 @@ A Streamlit dashboard will allow you to monitor the current air quality as well 
     - WiFi dongle (for RPi's older than model 3)
 - [VMA342 sensor](https://www.velleman.eu/products/view?id=450324)
 - [MH-Z19 sensor](https://www.hobbyelectronica.nl/product/mh-z19b-co2-sensor/)<sup>**</sup>
+- [SPS30 sensor](https://sensirion.com/products/catalog/SPS30) + [JST-ZHR 5p to DuPont cable](https://www.tinytronics.nl/nl/kabels-en-connectoren/kabels-en-adapters/jst-compatible/jst-zhr-5p-naar-dupont-female-compatible-kabel-15cm)
 - Small breadboard
-- Jumper cables (male-female)
+- Jumper cables (male-female & some male-male)
 - Ethernet cable for the initial setup
 
 <sup>*</sup>I used a Raspberry Pi model 2B for this project. Other models likely work as well, but weren't tested.
@@ -99,7 +101,41 @@ Connect the Raspberry Pi and VMA342 as follows:
     </tr>
 </table>
 
-<img src="images/electrical-connection-scheme.png" height="600" />
+Connect the Raspberry Pi and SPS30 as follows (shares the I²C lines with the VMA342):
+<table>
+    <tr>
+        <th>RPi</th>
+        <th>SPS30</th>
+        <th>Notes</th>
+    </tr>
+    <tr>
+        <td>5V</td>
+        <td>VDD (pin 1)</td>
+        <td>Sensor requires 5 V supply</td>
+    </tr>
+    <tr>
+        <td>SDA</td>
+        <td>SDA (pin 2)</td>
+        <td>Connect to the same SDA line as the VMA342</td>
+    </tr>
+    <tr>
+        <td>SCL</td>
+        <td>SCL (pin 3)</td>
+        <td>Connect to the same SCL line as the VMA342</td>
+    </tr>
+    <tr>
+        <td>(Tie to GND)</td>
+        <td>SEL (pin 4)</td>
+        <td>Hold low to enable the I²C interface</td>
+    </tr>
+    <tr>
+        <td>GND</td>
+        <td>GND (pin 5)</td>
+        <td>Common ground shared with VMA342</td>
+    </tr>
+</table>
+
+<img src="images/electrical-connection-scheme-with-sps30.png" height="600" />
 
 ## Project specific setup
 Clone this repository in the Documents folder:
@@ -194,6 +230,46 @@ while True:
     time.sleep(0.5)
 ```
 Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default is `0x5a`](https://github.com/adafruit/Adafruit_CircuitPython_CCS811/blob/main/adafruit_ccs811.py)).
+
+### SPS30 (particulate matter)
+- Uses the same I2C bus as the VMA342 board. Connect `VDD` to 5V, `GND` to ground and wire `SDA`/`SCL` to the Raspberry Pi's I2C pins as shown in the wiring diagram above.
+- Install the Sensirion drivers inside the virtual environment activated earlier:
+
+```bash
+pip install sensirion-i2c-driver sensirion_i2c_sps30
+```
+
+After installing the drivers, `monitor.py` will automatically start the SPS30 and log the mass concentration readings for PM1.0, PM2.5, PM4 and PM10 in the `records` table.
+
+Example to sanity-check the sensor interactively:
+```python
+import time
+import contextlib
+from sensirion_i2c_sps30 import Sps30Device, commands
+from sensirion_driver_adapters.i2c_adapter.linux_i2c_channel_provider import (
+    LinuxI2cChannelProvider,
+)
+
+provider = LinuxI2cChannelProvider("/dev/i2c-1")
+provider.prepare_channel()
+channel = provider.get_channel(
+    slave_address=0x69, crc_parameters=(8, 0x31, 0xFF, 0x00)
+)
+sensor = Sps30Device(channel)
+
+try:
+    sensor.start_measurement(commands.OutputFormat.OUTPUT_FORMAT_FLOAT)
+    time.sleep(1)  # give the fan a moment to spin up
+    while not sensor.read_data_ready_flag():
+        time.sleep(0.2)
+    mc1, mc25, mc4, mc10, *_ = sensor.read_measurement_values_float()
+    print(f"PM1.0={mc1:.1f} µg/m³, PM2.5={mc25:.1f}, PM4={mc4:.1f}, PM10={mc10:.1f}")
+finally:
+    with contextlib.suppress(Exception):
+        sensor.stop_measurement()
+    with contextlib.suppress(Exception):
+        provider.release_channel_resources()
+```
 
 ### Streamlit
 - `pip install streamlit==0.62.0` ([Installing Streamlit>0.62 on Raspberry Pi isn't straightforward because of dependency on PyArrow](https://discuss.streamlit.io/t/raspberry-pi-streamlit/2900/6))
