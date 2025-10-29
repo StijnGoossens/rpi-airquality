@@ -10,6 +10,14 @@ import streamlit as st
 
 from config import DB_PATH
 
+PM_COLUMNS = ["pm1", "pm25", "pm4", "pm10"]
+PM_LABELS = {
+    "pm1": "PM1.0",
+    "pm25": "PM2.5",
+    "pm4": "PM4.0",
+    "pm10": "PM10",
+}
+
 # Compat shim for legacy dependencies expecting deprecated numpy aliases.
 if not hasattr(np, "object"):
     np.object = object  # type: ignore[attr-defined,assignment]
@@ -58,6 +66,80 @@ def plot_metric_over_time(df, col):
     )
 
 
+def plot_pm_over_time(df, domain=None):
+    # Check which PM columns are available in the dataframe.
+    available_columns = [col for col in PM_COLUMNS if col in df.columns]
+    if not available_columns:
+        return None
+
+    # Prepare the data by removing the first valid measurement for each PM size.
+    pm_df = df[["date"] + available_columns].copy()
+    pm_df = pm_df.dropna(subset=available_columns, how="all")
+    if pm_df.empty:
+        return None
+
+    # Remove first valid measurement for each column to avoid initialization spikes.
+    for column in available_columns:
+        first_idx = pm_df[column].first_valid_index()
+        if first_idx is not None:
+            pm_df.loc[first_idx, column] = np.nan
+    pm_df = pm_df.dropna(subset=available_columns, how="all")
+    if pm_df.empty:
+        return None
+
+    # Prepare long-form data for Altair.
+    label_map = {col: PM_LABELS[col] for col in available_columns}
+    ordered_labels = [label_map[col] for col in available_columns]
+
+    # Raw data.
+    raw_long = (
+        pm_df.rename(columns=label_map)
+        .melt("date", var_name="particulate", value_name="μg/m³")
+        .dropna(subset=["μg/m³"])
+    )
+    if raw_long.empty:
+        return None
+
+    # Smoothed data (5-point rolling mean).
+    smoothed_wide = pm_df[["date"]].copy()
+    for col in available_columns:
+        smoothed_wide[col] = pm_df[col].rolling(window=5, min_periods=1).mean()
+
+    # Long-form smoothed data.
+    smoothed_long = (
+        smoothed_wide.rename(columns=label_map)
+        .melt("date", var_name="particulate", value_name="μg/m³")
+        .dropna(subset=["μg/m³"])
+    )
+    smoothed_long = smoothed_long[smoothed_long["particulate"].isin(ordered_labels)]
+
+    # Create the Altair chart.
+    x_encoding = alt.X(
+        "date:T",
+        axis=alt.Axis(title="time", format=("%H %M")),
+        scale=alt.Scale(domain=domain) if domain else alt.Undefined,
+    )
+    y_encoding = alt.Y("μg/m³:Q", axis=alt.Axis(title="mass concentration (μg/m³)"))
+    color_encoding = alt.Color("particulate:N", sort=ordered_labels, title="PM size")
+
+    # Base chart with raw data.
+    base_chart = (
+        alt.Chart(raw_long)
+        .mark_line(strokeWidth=0.5)
+        .encode(x=x_encoding, y=y_encoding, color=color_encoding)
+    )
+
+    # Add smoothed data on top, if available.
+    if smoothed_long.empty:
+        return base_chart
+    smooth_chart = (
+        alt.Chart(smoothed_long)
+        .mark_line(strokeWidth=2)
+        .encode(x=x_encoding, y=y_encoding, color=color_encoding)
+    )
+    return base_chart + smooth_chart
+
+
 # def set_room():
 #     print(room)
 
@@ -87,6 +169,9 @@ st.markdown(f"## {last_record['temp']:.1f} °C")
 st.text("🌡 Temperature")
 st.markdown(f"## {last_record['hum']:.0f} %")
 st.text("💧 Humidity")
+if "pm25" in last_record and pd.notna(last_record["pm25"]):
+    st.markdown(f"## {last_record['pm25']:.1f} µg/m³")
+    st.text("🌫 PM2.5")
 
 # Evolution over time.
 st.markdown("# Air quality evolution")
@@ -104,6 +189,12 @@ else:
     st.altair_chart(
         plot_metric_over_time(filtered_df, "pressure"), use_container_width=True
     )
+    domain = None
+    if not filtered_df.empty:
+        domain = (filtered_df["date"].min(), filtered_df["date"].max())
+    pm_chart = plot_pm_over_time(filtered_df, domain=domain)
+    if pm_chart is not None:
+        st.altair_chart(pm_chart, use_container_width=True)
 
 # Data export.
 st.markdown("### Export measurements")

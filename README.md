@@ -9,6 +9,9 @@ In this project, we'll monitor several parameters of indoor air quality with a R
 
 <img src="images/rpi-and-sensors.jpg" height="500" />
 <br/>
+
+*(SPS30 not shown in the image above.)*
+
 A Streamlit dashboard will allow you to monitor the current air quality as well as the evolution over time:
 <table>
     <tr>
