@@ -40,7 +40,7 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_records(limit: int | None = 10080) -> pd.DataFrame:
+def load_records(limit: int | None = None) -> pd.DataFrame:
     query = "SELECT * FROM records ORDER BY date DESC"
     if limit is not None:
         query += f" LIMIT {limit}"
@@ -49,13 +49,24 @@ def load_records(limit: int | None = 10080) -> pd.DataFrame:
     return _normalize_dataframe(df).sort_values("date")
 
 
-df = load_records(limit=10080)
+def load_day(day: datetime.date) -> pd.DataFrame:
+    # Dates are stored as naive local ISO strings, so a prefix match selects a day.
+    with sqlite3.connect(DB_PATH) as con:
+        df = pd.read_sql_query(
+            "SELECT * FROM records WHERE date LIKE ? ORDER BY date",
+            con,
+            params=(f"{day.isoformat()}%",),
+        )
+    return _normalize_dataframe(df)
 
-if df.empty:
+
+latest_df = load_records(limit=1)
+
+if latest_df.empty:
     st.warning("No measurements have been recorded yet.")
     st.stop()
 
-last_record = df.iloc[-1]
+last_record = latest_df.iloc[-1]
 
 
 def plot_metric_over_time(df, col):
@@ -161,6 +172,12 @@ st.markdown(
 # The current metrics.
 st.markdown("# Current air quality")
 st.text(f"🗓 {last_record['date'].strftime('%d-%m-%Y %H:%M')}")
+age = pd.Timestamp.now(tz="Europe/Brussels") - last_record["date"]
+if age > pd.Timedelta(minutes=10):
+    st.warning(
+        f"⚠️ Last measurement is {int(age.total_seconds() // 60)} minutes old "
+        "— the monitor may be down."
+    )
 # room = st.text_input("Room", on_change=set_room)
 co2_alert = "🚨" if last_record["co2"] > 900 else ""
 st.markdown(f"## {last_record['co2']:.0f} ppm {co2_alert}")
@@ -170,13 +187,14 @@ st.text("🌡 Temperature")
 st.markdown(f"## {last_record['hum']:.0f} %")
 st.text("💧 Humidity")
 if "pm25" in last_record and pd.notna(last_record["pm25"]):
-    st.markdown(f"## {last_record['pm25']:.1f} µg/m³")
+    pm_alert = "🚨" if last_record["pm25"] > 15 else ""
+    st.markdown(f"## {last_record['pm25']:.1f} µg/m³ {pm_alert}")
     st.text("🌫 PM2.5")
 
 # Evolution over time.
 st.markdown("# Air quality evolution")
 date = st.date_input("Day of interest", datetime.datetime.now())
-filtered_df = df[df["date"].dt.date == date].copy()
+filtered_df = load_day(date)
 
 if filtered_df.empty:
     st.info("No measurements recorded for the selected day yet.")
@@ -215,5 +233,6 @@ else:
 
 # Raspberry Pi shutdown button.
 st.markdown("### Shutdown Raspberry Pi")
-if st.button("⚠️ Shutdown Raspberry Pi"):
-    call("sudo shutdown -h now", shell=True)
+if st.checkbox("I really want to shut down the Pi"):
+    if st.button("⚠️ Shutdown Raspberry Pi"):
+        call("sudo shutdown -h now", shell=True)
