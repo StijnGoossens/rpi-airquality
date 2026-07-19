@@ -312,15 +312,20 @@ st.markdown(f"## {last_record['co2']:.0f} ppm {co2_alert}")
 st.text("😶‍🌫️ CO2 level")
 st.markdown(f"## {last_record['temp']:.1f} °C")
 st.text("🌡 Temperature")
+if "out_temp" in last_record and pd.notna(last_record["out_temp"]):
+    st.text(f"🌳 Outdoor: {last_record['out_temp']:.1f} °C")
+day_temps = load_last_days(1).dropna(subset=["temp"])
+if not day_temps.empty:
+    tmin = day_temps.loc[day_temps["temp"].idxmin()]
+    tmax = day_temps.loc[day_temps["temp"].idxmax()]
+    st.text(
+        f"↓ {tmin['temp']:.1f} °C at {tmin['date'].strftime('%H:%M')} · "
+        f"↑ {tmax['temp']:.1f} °C at {tmax['date'].strftime('%H:%M')} (last 24h)"
+    )
 st.markdown(f"## {last_record['hum']:.0f} %")
 st.text("💧 Humidity")
-outdoor_parts = [
-    f"{last_record[col]:.{digits}f} {unit}"
-    for col, digits, unit in (("out_temp", 1, "°C"), ("out_hum", 0, "%"))
-    if col in last_record and pd.notna(last_record[col])
-]
-if outdoor_parts:
-    st.text("🌳 Outdoor: " + " · ".join(outdoor_parts))
+if "out_hum" in last_record and pd.notna(last_record["out_hum"]):
+    st.text(f"🌳 Outdoor: {last_record['out_hum']:.0f} %")
 if "pm25" in last_record and pd.notna(last_record["pm25"]):
     pm_alert = "🚨" if last_record["pm25"] > 15 else ""
     st.markdown(f"## {last_record['pm25']:.1f} µg/m³ {pm_alert}")
