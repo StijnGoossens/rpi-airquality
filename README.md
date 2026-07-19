@@ -298,6 +298,22 @@ For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error m
 ```
 This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder. The last line is a watchdog: if Streamlit crashes (e.g. the `StreamClosedError` issue above), it gets restarted within 30 minutes.
 
+### Weekly database backup to Google Drive
+- `sudo apt install rclone` on the Pi.
+- On a machine with a browser: `rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ" --auth-no-open-browser` (the base64 blob sets `scope: drive.file`, so rclone can only touch files it created itself — it never sees the rest of your Drive). Complete the OAuth flow in the browser.
+- On the Pi, create `~/.config/rclone/rclone.conf` (mode 600) with the token from the previous step:
+```
+[gdrive]
+type = drive
+scope = drive.file
+token = <token JSON from rclone authorize>
+```
+- Add to `crontab -e`:
+```
+0 3 * * 1 sh $HOME/Documents/rpi-airquality/scripts/backup_db.sh >> $HOME/cronjoblog-backup 2>&1
+```
+`scripts/backup_db.sh` takes a consistent snapshot of the live database via SQLite's online backup API (safe while the monitor is writing) and uploads it as a dated copy to `rpi-airquality-backups/` in Google Drive.
+
 Note that these commands call the interpreter and Streamlit executable directly from the virtual environment so no extra PATH changes are required. If your virtual environment lives elsewhere, update the paths accordingly. Cron runs with a minimal PATH (`/bin:/usr/bin`), so absolute paths (or environment variables such as `$HOME`) avoid command-not-found errors ([source](https://serverfault.com/questions/449651/why-is-my-crontab-not-working-and-how-can-i-troubleshoot-it)).
 
 Extra: to confirm the cron jobs have run, use the system journal on recent Raspberry Pi OS releases: `sudo journalctl -u cron --since "10 minutes ago"`. On older setups that still log to `/var/log/syslog`, `grep CRON /var/log/syslog` remains an option. Tail the log files with `tail -F $HOME/cronjoblog-monitor` and `tail -F $HOME/cronjoblog-dashboard`.
