@@ -10,6 +10,20 @@ import streamlit as st
 
 from config import DB_PATH
 
+NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
+TEMP_THRESHOLDS = [
+    (20, "#5aa9e6", "20°C tropical-night threshold"),
+    (26, "#f2a516", "26°C warm indoor threshold"),
+    (28, "#e8630a", "28°C hot indoor threshold"),
+]
+WEEK_FEATURES = {
+    "temp": "Temperature (°C)",
+    "co2": "CO2 (ppm)",
+    "hum": "Humidity (%)",
+    "pressure": "Pressure (hPa)",
+    "pm25": "PM2.5 (µg/m³)",
+}
+
 PM_COLUMNS = ["pm1", "pm25", "pm4", "pm10"]
 PM_LABELS = {
     "pm1": "PM1.0",
@@ -58,6 +72,85 @@ def load_day(day: datetime.date) -> pd.DataFrame:
             params=(f"{day.isoformat()}%",),
         )
     return _normalize_dataframe(df)
+
+
+def load_last_days(days: int = 7) -> pd.DataFrame:
+    # Stored dates are local ISO strings, so lexicographic >= works.
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    with sqlite3.connect(DB_PATH) as con:
+        df = pd.read_sql_query(
+            "SELECT * FROM records WHERE date >= ? ORDER BY date",
+            con,
+            params=(cutoff,),
+        )
+    return _normalize_dataframe(df)
+
+
+def night_spans(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    spans = []
+    day = start.normalize()
+    while day <= end.normalize():
+        n0 = day + pd.Timedelta(hours=NIGHT_START)
+        n1 = day + pd.Timedelta(hours=24 + NIGHT_END)
+        if n0 < end and n1 > start:
+            spans.append((max(n0, start), min(n1, end)))
+        day += pd.Timedelta(days=1)
+    return spans
+
+
+def plot_week_overview(df: pd.DataFrame, col: str, label: str) -> alt.Chart | None:
+    data = df[["date", col]].dropna()
+    if data.empty:
+        return None
+    start, end = data["date"].min(), data["date"].max()
+    indexed = data.set_index("date")[col]
+    # Downsample the raw line to keep the browser-side chart light.
+    raw = indexed.resample("5min").mean().dropna().reset_index()
+    hourly = indexed.resample("1h").mean().dropna().reset_index()
+
+    x = alt.X("date:T", axis=alt.Axis(title=None, format="%b %d"))
+    y = alt.Y(f"{col}:Q", title=label, scale=alt.Scale(zero=False))
+
+    bands_df = pd.DataFrame(night_spans(start, end), columns=["n0", "n1"])
+    bands = (
+        alt.Chart(bands_df)
+        .mark_rect(color="#cccccc", opacity=0.4)
+        .encode(x="n0:T", x2="n1:T")
+    )
+    raw_line = (
+        alt.Chart(raw).mark_line(strokeWidth=0.5, color="#e8763a", opacity=0.6).encode(x=x, y=y)
+    )
+    hourly_line = alt.Chart(hourly).mark_line(strokeWidth=2.5, color="#d0421b").encode(
+        x=x, y=y, tooltip=["date:T", alt.Tooltip(f"{col}:Q", format=".1f", title=label)]
+    )
+    chart = bands + raw_line + hourly_line
+
+    if col == "temp":
+        thr_df = pd.DataFrame(TEMP_THRESHOLDS, columns=["y", "color", "label"])
+        thr_df["x"] = end
+        color = alt.Color("color:N", scale=None)
+        chart += alt.Chart(thr_df).mark_rule(strokeDash=[6, 4]).encode(
+            y="y:Q", color=color
+        )
+        chart += alt.Chart(thr_df).mark_text(align="right", dx=-4, dy=-7).encode(
+            x="x:T", y="y:Q", text="label:N", color=color
+        )
+        minima = [
+            {"date": chunk.idxmin(), "y": chunk.min(), "label": f"{chunk.min():.1f}°C"}
+            for n0, n1 in night_spans(start, end)
+            if not (chunk := indexed[n0:n1]).empty
+        ]
+        min_df = pd.DataFrame(minima)
+        chart += alt.Chart(min_df).mark_point(filled=True, size=90, color="#2077b4").encode(
+            x="date:T", y="y:Q", tooltip=[alt.Tooltip("y:Q", format=".1f", title="Night min")]
+        )
+        chart += alt.Chart(min_df).mark_text(dy=14, color="#2077b4").encode(
+            x="date:T", y="y:Q", text="label:N"
+        )
+
+    return chart.properties(height=350)
 
 
 latest_df = load_records(limit=1)
@@ -213,6 +306,23 @@ else:
     pm_chart = plot_pm_over_time(filtered_df, domain=domain)
     if pm_chart is not None:
         st.altair_chart(pm_chart, use_container_width=True)
+
+# Last 7 days overview.
+st.markdown("# Last 7 days")
+week_df = load_last_days(7)
+if week_df.empty:
+    st.info("No measurements recorded in the last 7 days.")
+else:
+    available = [c for c in WEEK_FEATURES if c in week_df.columns]
+    feature = st.selectbox(
+        "Feature", available, index=available.index("temp"), format_func=WEEK_FEATURES.get
+    )
+    week_chart = plot_week_overview(week_df, feature, WEEK_FEATURES[feature])
+    if week_chart is None:
+        st.info("No measurements for this feature in the last 7 days.")
+    else:
+        st.text(f"Shaded bands are nights, {NIGHT_START}:00-0{NIGHT_END}:00")
+        st.altair_chart(week_chart, use_container_width=True)
 
 # Data export.
 st.markdown("### Export measurements")
