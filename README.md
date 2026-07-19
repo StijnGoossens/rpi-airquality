@@ -294,8 +294,9 @@ For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error m
 @reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/python $HOME/Documents/rpi-airquality/src/monitor.py > $HOME/cronjoblog-monitor 2>&1)
 @reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 4202 > $HOME/cronjoblog-dashboard 2>&1)
 */5 * * * * /bin/ping -c 2 www.google.com > $HOME/cronjoblog-ping.txt 2>&1
+*/30 * * * * pgrep -f "streamlit run" > /dev/null || $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 4202 >> $HOME/cronjoblog-dashboard 2>&1
 ```
-This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder.
+This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder. The last line is a watchdog: if Streamlit crashes (e.g. the `StreamClosedError` issue above), it gets restarted within 30 minutes.
 
 Note that these commands call the interpreter and Streamlit executable directly from the virtual environment so no extra PATH changes are required. If your virtual environment lives elsewhere, update the paths accordingly. Cron runs with a minimal PATH (`/bin:/usr/bin`), so absolute paths (or environment variables such as `$HOME`) avoid command-not-found errors ([source](https://serverfault.com/questions/449651/why-is-my-crontab-not-working-and-how-can-i-troubleshoot-it)).
 
