@@ -1,7 +1,9 @@
 import atexit
 import datetime
+import json
 import sqlite3
 import time
+import urllib.request
 from contextlib import suppress
 
 import bme280
@@ -17,7 +19,7 @@ except ImportError:
     Sps30Device = None  # type: ignore[assignment]
     commands = None  # type: ignore[assignment]
 
-from config import DB_PATH
+from config import DB_PATH, LATITUDE, LONGITUDE
 
 POLL_FREQUENCY_SECONDS = 300
 
@@ -104,6 +106,27 @@ def read_sps30(params):
     return pm1, pm25, pm4, pm10
 
 
+OUTDOOR_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    f"?latitude={LATITUDE}&longitude={LONGITUDE}"
+    "&current=temperature_2m,relative_humidity_2m,surface_pressure"
+)
+
+
+def read_outdoor():
+    try:
+        with urllib.request.urlopen(OUTDOOR_URL, timeout=10) as response:
+            current = json.load(response)["current"]
+        return (
+            current["temperature_2m"],
+            current["relative_humidity_2m"],
+            current["surface_pressure"],
+        )
+    except Exception as exc:
+        print("Failed to fetch outdoor weather:", exc)
+        return None, None, None
+
+
 def create_table(sql_query):
     try:
         cur.execute(sql_query)
@@ -142,7 +165,7 @@ if __name__ == "__main__":
     create_table(
         """CREATE TABLE sessions (session_id integer, start_date timestamp, location text)"""
     )
-    for column in ("pm1", "pm25", "pm4", "pm10"):
+    for column in ("pm1", "pm25", "pm4", "pm10", "out_temp", "out_hum", "out_pressure"):
         ensure_column("records", column, "real")
 
     # Determine the current session id.
@@ -170,12 +193,13 @@ if __name__ == "__main__":
         co2 = read_mhz19()
         temp, hum, pressure = read_bme280(bme280_params)
         pm1, pm25, pm4, pm10 = read_sps30(sps30_params)
-        print(temp, hum, pressure, pm1, pm25, pm4, pm10)
+        out_temp, out_hum, out_pressure = read_outdoor()
+        print(temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure)
 
         # Add measurements to database.
         cur.execute(
-            "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, co2, None, None, temp, hum, pressure, pm1, pm25, pm4, pm10, session_id),
+            "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, co2, None, None, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, session_id),
         )
         con.commit()
         time.sleep(POLL_FREQUENCY_SECONDS)

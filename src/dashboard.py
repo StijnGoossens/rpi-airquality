@@ -24,6 +24,10 @@ WEEK_FEATURES = {
     "pm25": "PM2.5 (µg/m³)",
 }
 
+# Outdoor (Open-Meteo) counterparts of indoor metrics, drawn as dashed gray comparison lines.
+OUTDOOR_COLUMNS = {"temp": "out_temp", "hum": "out_hum", "pressure": "out_pressure"}
+OUTDOOR_COLOR = "#888888"
+
 PM_COLUMNS = ["pm1", "pm25", "pm4", "pm10"]
 PM_LABELS = {
     "pm1": "PM1.0",
@@ -127,6 +131,19 @@ def plot_week_overview(df: pd.DataFrame, col: str, label: str) -> alt.Chart | No
     )
     chart = bands + raw_line + hourly_line
 
+    out_col = OUTDOOR_COLUMNS.get(col)
+    if out_col and out_col in df.columns and df[out_col].notna().any():
+        out_hourly = (
+            df.set_index("date")[out_col].resample("1h").mean().dropna().reset_index()
+        )
+        chart += alt.Chart(out_hourly).mark_line(
+            strokeWidth=1.5, color=OUTDOOR_COLOR, strokeDash=[5, 3]
+        ).encode(
+            x=x,
+            y=alt.Y(f"{out_col}:Q", title=label, scale=alt.Scale(zero=False)),
+            tooltip=["date:T", alt.Tooltip(f"{out_col}:Q", format=".1f", title="Outdoor")],
+        )
+
     if col == "temp":
         thr_df = pd.DataFrame(TEMP_THRESHOLDS, columns=["y", "color", "label"])
         thr_df["x"] = end
@@ -163,11 +180,29 @@ last_record = latest_df.iloc[-1]
 
 
 def plot_metric_over_time(df, col):
-    return (
+    chart = (
         alt.Chart(df)
         .mark_line()
         .encode(x=alt.X("date:T", axis=alt.Axis(title="time", format=("%H %M"))), y=col)
     )
+    out_col = OUTDOOR_COLUMNS.get(col)
+    if out_col and out_col in df.columns and df[out_col].notna().any():
+        outdoor = (
+            alt.Chart(df.dropna(subset=[out_col]))
+            .mark_line(color=OUTDOOR_COLOR, strokeDash=[5, 3])
+            .encode(
+                x="date:T",
+                y=alt.Y(f"{out_col}:Q", title=col),
+                tooltip=[
+                    "date:T",
+                    alt.Tooltip(f"{out_col}:Q", format=".1f", title=f"outdoor {col}"),
+                ],
+            )
+        )
+        chart = (chart + outdoor).properties(
+            title=alt.TitleParams("solid = indoor, dashed gray = outdoor", fontSize=11, anchor="end")
+        )
+    return chart
 
 
 def plot_pm_over_time(df, domain=None):
@@ -321,7 +356,10 @@ else:
     if week_chart is None:
         st.info("No measurements for this feature in the last 7 days.")
     else:
-        st.text(f"Shaded bands are nights, {NIGHT_START}:00-0{NIGHT_END}:00")
+        caption = f"Shaded bands are nights, {NIGHT_START}:00-0{NIGHT_END}:00"
+        if feature in OUTDOOR_COLUMNS:
+            caption += " — dashed gray line is outdoor"
+        st.text(caption)
         st.altair_chart(week_chart, use_container_width=True)
 
 # Data export.
