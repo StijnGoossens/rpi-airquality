@@ -314,6 +314,13 @@ st.markdown(f"## {last_record['temp']:.1f} °C")
 st.text("🌡 Temperature")
 st.markdown(f"## {last_record['hum']:.0f} %")
 st.text("💧 Humidity")
+outdoor_parts = [
+    f"{last_record[col]:.{digits}f} {unit}"
+    for col, digits, unit in (("out_temp", 1, "°C"), ("out_hum", 0, "%"))
+    if col in last_record and pd.notna(last_record[col])
+]
+if outdoor_parts:
+    st.text("🌳 Outdoor: " + " · ".join(outdoor_parts))
 if "pm25" in last_record and pd.notna(last_record["pm25"]):
     pm_alert = "🚨" if last_record["pm25"] > 15 else ""
     st.markdown(f"## {last_record['pm25']:.1f} µg/m³ {pm_alert}")
