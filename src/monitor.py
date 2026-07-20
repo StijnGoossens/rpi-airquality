@@ -109,22 +109,43 @@ def read_sps30(params):
 OUTDOOR_URL = (
     "https://api.open-meteo.com/v1/forecast"
     f"?latitude={LATITUDE}&longitude={LONGITUDE}"
-    "&current=temperature_2m,relative_humidity_2m,surface_pressure"
+    "&current=temperature_2m,relative_humidity_2m,surface_pressure,"
+    "wind_speed_10m,wind_direction_10m"
+)
+# Outdoor particulates from the CAMS model (hourly, ~10 km resolution).
+AIR_QUALITY_URL = (
+    "https://air-quality-api.open-meteo.com/v1/air-quality"
+    f"?latitude={LATITUDE}&longitude={LONGITUDE}"
+    "&current=pm2_5,pm10"
 )
 
 
-def read_outdoor():
+def _fetch_current(url, keys):
     try:
-        with urllib.request.urlopen(OUTDOOR_URL, timeout=10) as response:
+        with urllib.request.urlopen(url, timeout=10) as response:
             current = json.load(response)["current"]
-        return (
-            current["temperature_2m"],
-            current["relative_humidity_2m"],
-            current["surface_pressure"],
-        )
+        return tuple(current.get(key) for key in keys)
     except Exception as exc:
-        print("Failed to fetch outdoor weather:", exc)
-        return None, None, None
+        print("Failed to fetch outdoor data:", exc)
+        return (None,) * len(keys)
+
+
+def read_outdoor():
+    # Wind speed in km/h, direction in degrees (0 = north).
+    return _fetch_current(
+        OUTDOOR_URL,
+        (
+            "temperature_2m",
+            "relative_humidity_2m",
+            "surface_pressure",
+            "wind_speed_10m",
+            "wind_direction_10m",
+        ),
+    )
+
+
+def read_outdoor_air():
+    return _fetch_current(AIR_QUALITY_URL, ("pm2_5", "pm10"))
 
 
 def create_table(sql_query):
@@ -165,7 +186,19 @@ if __name__ == "__main__":
     create_table(
         """CREATE TABLE sessions (session_id integer, start_date timestamp, location text)"""
     )
-    for column in ("pm1", "pm25", "pm4", "pm10", "out_temp", "out_hum", "out_pressure"):
+    for column in (
+        "pm1",
+        "pm25",
+        "pm4",
+        "pm10",
+        "out_temp",
+        "out_hum",
+        "out_pressure",
+        "out_pm25",
+        "out_pm10",
+        "out_wind_speed",
+        "out_wind_dir",
+    ):
         ensure_column("records", column, "real")
 
     # Determine the current session id.
@@ -193,13 +226,18 @@ if __name__ == "__main__":
         co2 = read_mhz19()
         temp, hum, pressure = read_bme280(bme280_params)
         pm1, pm25, pm4, pm10 = read_sps30(sps30_params)
-        out_temp, out_hum, out_pressure = read_outdoor()
-        print(temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure)
+        out_temp, out_hum, out_pressure, out_wind_speed, out_wind_dir = read_outdoor()
+        out_pm25, out_pm10 = read_outdoor_air()
+        print(
+            temp, hum, pressure, pm1, pm25, pm4, pm10,
+            out_temp, out_hum, out_pressure, out_pm25, out_pm10,
+            out_wind_speed, out_wind_dir,
+        )
 
         # Add measurements to database.
         cur.execute(
-            "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, co2, None, None, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, session_id),
+            "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, co2, None, None, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id),
         )
         con.commit()
         time.sleep(POLL_FREQUENCY_SECONDS)
