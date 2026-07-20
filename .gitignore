@@ -1,4 +1,7 @@
 *.db
 *.pyc
+*.csv
 output/*
+outputs/
+.DS_Store
 src/location.py
