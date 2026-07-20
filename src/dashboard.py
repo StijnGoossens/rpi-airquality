@@ -318,10 +318,8 @@ day_temps = load_last_days(1).dropna(subset=["temp"])
 if not day_temps.empty:
     tmin = day_temps.loc[day_temps["temp"].idxmin()]
     tmax = day_temps.loc[day_temps["temp"].idxmax()]
-    st.text(
-        f"↓ {tmin['temp']:.1f} °C at {tmin['date'].strftime('%H:%M')} · "
-        f"↑ {tmax['temp']:.1f} °C at {tmax['date'].strftime('%H:%M')} (last 24h)"
-    )
+    st.text(f"↓ {tmin['temp']:.1f} °C at {tmin['date'].strftime('%H:%M')} (last 24h)")
+    st.text(f"↑ {tmax['temp']:.1f} °C at {tmax['date'].strftime('%H:%M')} (last 24h)")
 st.markdown(f"## {last_record['hum']:.0f} %")
 st.text("💧 Humidity")
 if "out_hum" in last_record and pd.notna(last_record["out_hum"]):
