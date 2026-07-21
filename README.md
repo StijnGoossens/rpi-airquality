@@ -295,8 +295,9 @@ For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error m
 @reboot (/bin/sleep 30; $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 4202 > $HOME/cronjoblog-dashboard 2>&1)
 */5 * * * * /bin/ping -c 2 www.google.com > $HOME/cronjoblog-ping.txt 2>&1
 */30 * * * * pgrep -f "streamlit run" > /dev/null || $HOME/venvs/airquality/bin/streamlit run $HOME/Documents/rpi-airquality/src/dashboard.py --server.address 0.0.0.0 --server.port 4202 >> $HOME/cronjoblog-dashboard 2>&1
+*/5 * * * * sh $HOME/Documents/rpi-airquality/scripts/wifi_watchdog.sh >> $HOME/cronjoblog-wifi 2>&1
 ```
-This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder. The last line is a watchdog: if Streamlit crashes (e.g. the `StreamClosedError` issue above), it gets restarted within 30 minutes.
+This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder. The Streamlit line is a watchdog: if it crashes (e.g. the `StreamClosedError` issue above), it gets restarted within 30 minutes. The last line is a Wi-Fi watchdog (`scripts/wifi_watchdog.sh`): if `wlan0` drops its IP (observed after a router hiccup or Pi reboot), it reconnects via `nmcli` within 5 minutes — a shorter interval than the Streamlit watchdog since losing Wi-Fi also cuts off SSH access and the outdoor-weather API calls in `monitor.py`, which retry a few times on their own but can't recover from a fully dead connection.
 
 ### Weekly database backup to Google Drive
 - `sudo apt install rclone` on the Pi.

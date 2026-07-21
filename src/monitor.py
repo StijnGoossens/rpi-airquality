@@ -120,14 +120,19 @@ AIR_QUALITY_URL = (
 )
 
 
-def _fetch_current(url, keys):
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            current = json.load(response)["current"]
-        return tuple(current.get(key) for key in keys)
-    except Exception as exc:
-        print("Failed to fetch outdoor data:", exc)
-        return (None,) * len(keys)
+def _fetch_current(url, keys, attempts=3, retry_delay_seconds=5):
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                current = json.load(response)["current"]
+            return tuple(current.get(key) for key in keys)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(retry_delay_seconds)
+    print("Failed to fetch outdoor data:", last_exc)
+    return (None,) * len(keys)
 
 
 def read_outdoor():
