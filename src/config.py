@@ -11,3 +11,12 @@ try:
     from location import LATITUDE, LONGITUDE  # noqa: F811
 except ImportError:
     pass
+
+# ntfy.sh topic to push notifications to (e.g. indoor/outdoor temp getting close).
+# Set in the gitignored src/location.py to keep it out of the public repo. Install the
+# ntfy app (https://ntfy.sh) and subscribe to the same topic to receive alerts.
+NTFY_TOPIC = None
+try:
+    from location import NTFY_TOPIC  # noqa: F811
+except ImportError:
+    pass

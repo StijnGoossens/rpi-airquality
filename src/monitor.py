@@ -19,9 +19,17 @@ except ImportError:
     Sps30Device = None  # type: ignore[assignment]
     commands = None  # type: ignore[assignment]
 
-from config import DB_PATH, LATITUDE, LONGITUDE
+from config import DB_PATH, LATITUDE, LONGITUDE, NTFY_TOPIC
 
 POLL_FREQUENCY_SECONDS = 300
+# Close-the-windows alert: fires once outdoor has risen to within this many degrees of
+# indoor (and is still below it). Re-arms once they diverge again by the reset amount.
+TEMP_CLOSE_THRESHOLD = 1.0
+TEMP_CLOSE_RESET_THRESHOLD = 2.0
+# Open-the-windows alert: fires once outdoor has dropped at least this many degrees below
+# indoor. Re-arms once the gap shrinks back under the reset amount.
+TEMP_OPEN_THRESHOLD = 2.0
+TEMP_OPEN_RESET_THRESHOLD = 1.0
 
 
 def read_mhz19():
@@ -153,6 +161,21 @@ def read_outdoor_air():
     return _fetch_current(AIR_QUALITY_URL, ("pm2_5", "pm10"))
 
 
+def send_notification(title, message):
+    if not NTFY_TOPIC:
+        return
+    try:
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=message.encode("utf-8"),
+            headers={"Title": title, "Priority": "high", "Tags": "warning"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as exc:
+        print("Failed to send notification:", exc)
+
+
 def create_table(sql_query):
     try:
         cur.execute(sql_query)
@@ -224,6 +247,8 @@ if __name__ == "__main__":
     sps30_params = init_sps30()
 
     # Take measurements every minute.
+    close_alert_sent = False
+    open_alert_sent = False
     while True:
         now = datetime.datetime.now()
 
@@ -245,6 +270,33 @@ if __name__ == "__main__":
             (now, co2, None, None, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id),
         )
         con.commit()
+
+        # Notify when indoor/outdoor temps cross the close/open-window zones.
+        if temp is not None and out_temp is not None:
+            diff = temp - out_temp  # positive = indoor warmer than outdoor
+
+            # Close the windows: outdoor has risen back up to near indoor.
+            if 0 <= diff <= TEMP_CLOSE_THRESHOLD and not close_alert_sent:
+                send_notification(
+                    "Close the windows",
+                    f"Outdoor temp ({out_temp:.1f}°C) is within "
+                    f"{TEMP_CLOSE_THRESHOLD:.0f}°C of indoor ({temp:.1f}°C).",
+                )
+                close_alert_sent = True
+            elif abs(diff) > TEMP_CLOSE_RESET_THRESHOLD:
+                close_alert_sent = False
+
+            # Open the windows: outdoor has dropped comfortably below indoor.
+            if diff >= TEMP_OPEN_THRESHOLD and not open_alert_sent:
+                send_notification(
+                    "Open the windows",
+                    f"Outdoor temp ({out_temp:.1f}°C) is "
+                    f"{diff:.1f}°C below indoor ({temp:.1f}°C).",
+                )
+                open_alert_sent = True
+            elif diff < TEMP_OPEN_RESET_THRESHOLD:
+                open_alert_sent = False
+
         time.sleep(POLL_FREQUENCY_SECONDS)
 
     con.close()
