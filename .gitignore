@@ -1,4 +1,6 @@
 *.db
+*.db-wal
+*.db-shm
 *.pyc
 *.csv
 output/*
