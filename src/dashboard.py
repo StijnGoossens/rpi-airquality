@@ -1,4 +1,3 @@
-import base64
 import datetime
 import sqlite3
 from subprocess import call
@@ -374,17 +373,35 @@ else:
 
 # Data export.
 st.markdown("### Export measurements")
+
+
+@st.cache_data(ttl=600)
+def full_history_csv() -> bytes:
+    # Cached so the widget reruns triggered by other controls don't re-read all
+    # ~80k rows; the ttl releases the bytes again on an idle Pi.
+    df = load_records(limit=None)
+    # to_csv() on an empty frame still emits a header row, so signal empty here.
+    return b"" if df.empty else df.to_csv(index=False).encode("utf-8")
+
+
+# Preparing is gated behind a button because the read is heavy, and the result
+# is remembered in session state so the download link survives the rerun that
+# clicking it causes.
 if st.button("⬇️ Prepare complete CSV download"):
-    full_df = load_records(limit=None)
-    if full_df.empty:
+    st.session_state.csv_ready = True
+if st.session_state.get("csv_ready"):
+    csv_bytes = full_history_csv()
+    if len(csv_bytes) == 0:
         st.info("No data available yet to download.")
     else:
-        csv_bytes = full_df.to_csv(index=False).encode("utf-8")
-        csv_b64 = base64.b64encode(csv_bytes).decode()
-        st.markdown(
-            f'<a href="data:text/csv;base64,{csv_b64}" download="airquality_full_history.csv">'
-            "Download airquality_full_history.csv</a>",
-            unsafe_allow_html=True,
+        # download_button streams the bytes over the existing websocket. The old
+        # base64 data: URI held ~4 more copies of the whole history in RAM, on a
+        # Pi where that was enough to invite the OOM killer.
+        st.download_button(
+            "⬇️ Download airquality_full_history.csv",
+            csv_bytes,
+            file_name="airquality_full_history.csv",
+            mime="text/csv",
         )
 else:
     st.write("Press the button to prepare the download link.")
