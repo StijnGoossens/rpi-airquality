@@ -1,7 +1,10 @@
 import base64
+import csv
 import datetime
+import io
 import sqlite3
 from subprocess import call
+from zoneinfo import ZoneInfo
 
 import altair as alt
 import numpy as np
@@ -11,6 +14,7 @@ import streamlit as st
 from config import DB_PATH
 
 NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
+EXPORT_TZ = ZoneInfo("Europe/Brussels")  # matches _normalize_dataframe's localisation
 TEMP_THRESHOLDS = [
     (20, "#5aa9e6", "20°C tropical-night threshold"),
     (26, "#f2a516", "26°C warm indoor threshold"),
@@ -90,6 +94,78 @@ def load_last_days(days: int = 7) -> pd.DataFrame:
             params=(cutoff,),
         )
     return _normalize_dataframe(df)
+
+
+def _float_export_columns(cur, columns: list[str]) -> set[str]:
+    # pandas widens any numeric column containing a NULL to float64, so those
+    # export as "426.0" rather than "426". Counting the nulls sqlite-side keeps
+    # the streamed CSV byte-identical to the pandas one it replaces.
+    # Column names come from the table schema, not from user input.
+    counts = cur.execute(
+        "SELECT COUNT(*), " + ", ".join(f"COUNT({c})" for c in columns) + " FROM records"
+    ).fetchone()
+    total, per_column = counts[0], counts[1:]
+    return {c for c, filled in zip(columns, per_column) if filled < total}
+
+
+def full_history_download_link(chunk_rows: int = 2000) -> str | None:
+    """Build the CSV download link, streaming so the history is never one blob.
+
+    Streamlit 0.62 has no download_button, so the file has to be embedded in the
+    page as a base64 data: URI. Reading the history into a DataFrame first cost
+    ~106 MB peak on a 921 MB Pi; going straight from the sqlite cursor to base64
+    chunks costs ~39 MB for the same bytes. Returns None when there is no data.
+    """
+    parts = ['<a href="data:text/csv;base64,']
+    buf = io.StringIO()
+    # to_csv() writes \n; csv.writer defaults to \r\n.
+    writer = csv.writer(buf, lineterminator="\n")
+    carry = b""
+    rows_seen = 0
+
+    con = sqlite3.connect(DB_PATH)
+    try:
+        columns = [d[1] for d in con.execute("PRAGMA table_info(records)")]
+        float_columns = _float_export_columns(con.cursor(), columns)
+        is_float = [c in float_columns for c in columns]
+        date_at = columns.index("date")
+
+        writer.writerow(columns)
+        cur = con.execute("SELECT * FROM records ORDER BY date")
+        while rows := cur.fetchmany(chunk_rows):
+            rows_seen += len(rows)
+            for row in rows:
+                out = ["" if v is None else repr(float(v)) if f else str(v)
+                       for v, f in zip(row, is_float)]
+                # Dates are stored naive local; _normalize_dataframe localises
+                # them to Europe/Brussels, so the export has to match.
+                out[date_at] = (
+                    datetime.datetime.fromisoformat(row[date_at])
+                    .replace(tzinfo=EXPORT_TZ)
+                    .isoformat(sep=" ")
+                )
+                writer.writerow(out)
+
+            chunk = carry + buf.getvalue().encode("utf-8")
+            buf.seek(0)
+            buf.truncate(0)
+            # b64encode(a) + b64encode(b) equals b64encode(a + b) only when
+            # len(a) is a multiple of 3, so carry the remainder to the next chunk.
+            cut = len(chunk) - len(chunk) % 3
+            parts.append(base64.b64encode(chunk[:cut]).decode("ascii"))
+            carry = chunk[cut:]
+    finally:
+        con.close()
+
+    if not rows_seen:
+        return None
+    if carry:
+        parts.append(base64.b64encode(carry).decode("ascii"))
+    parts.append(
+        '" download="airquality_full_history.csv">'
+        "Download airquality_full_history.csv</a>"
+    )
+    return "".join(parts)
 
 
 def night_spans(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -375,17 +451,11 @@ else:
 # Data export.
 st.markdown("### Export measurements")
 if st.button("⬇️ Prepare complete CSV download"):
-    full_df = load_records(limit=None)
-    if full_df.empty:
+    link = full_history_download_link()
+    if link is None:
         st.info("No data available yet to download.")
     else:
-        csv_bytes = full_df.to_csv(index=False).encode("utf-8")
-        csv_b64 = base64.b64encode(csv_bytes).decode()
-        st.markdown(
-            f'<a href="data:text/csv;base64,{csv_b64}" download="airquality_full_history.csv">'
-            "Download airquality_full_history.csv</a>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(link, unsafe_allow_html=True)
 else:
     st.write("Press the button to prepare the download link.")
 
