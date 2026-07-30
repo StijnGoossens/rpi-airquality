@@ -193,7 +193,11 @@ def ensure_column(table, column, column_type):
 
 if __name__ == "__main__":
     # Connect to the database and create thee tables if they don't exist yet.
-    con = sqlite3.connect(DB_PATH)
+    # WAL so a dashboard read (the full-history chart scans the whole table) no
+    # longer blocks our writes; the timeout rides out the brief locks WAL keeps
+    # (checkpoints, schema changes) instead of dying on "database is locked".
+    con = sqlite3.connect(DB_PATH, timeout=60)
+    con.execute("PRAGMA journal_mode=WAL")
     cur = con.cursor()
     create_table(
         """CREATE TABLE records (
