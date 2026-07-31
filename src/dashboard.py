@@ -15,11 +15,6 @@ from config import DB_PATH
 
 NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
 EXPORT_TZ = ZoneInfo("Europe/Brussels")  # matches _normalize_dataframe's localisation
-TEMP_THRESHOLDS = [
-    (20, "#5aa9e6", "20°C tropical-night threshold"),
-    (26, "#f2a516", "26°C warm indoor threshold"),
-    (28, "#e8630a", "28°C hot indoor threshold"),
-]
 WEEK_FEATURES = {
     "temp": "Temperature (°C)",
     "co2": "CO2 (ppm)",
@@ -221,15 +216,6 @@ def plot_week_overview(df: pd.DataFrame, col: str, label: str) -> alt.Chart | No
         )
 
     if col == "temp":
-        thr_df = pd.DataFrame(TEMP_THRESHOLDS, columns=["y", "color", "label"])
-        thr_df["x"] = end
-        color = alt.Color("color:N", scale=None)
-        chart += alt.Chart(thr_df).mark_rule(strokeDash=[6, 4]).encode(
-            y="y:Q", color=color
-        )
-        chart += alt.Chart(thr_df).mark_text(align="right", dx=-4, dy=-7).encode(
-            x="x:T", y="y:Q", text="label:N", color=color
-        )
         minima = [
             {"date": chunk.idxmin(), "y": chunk.min(), "label": f"{chunk.min():.1f}°C"}
             for n0, n1 in night_spans(start, end)
@@ -255,11 +241,19 @@ if latest_df.empty:
 last_record = latest_df.iloc[-1]
 
 
+def time_axis_format(df) -> str:
+    # A window crossing midnight repeats every clock label, so name the day too.
+    return "%H %M" if df["date"].dt.normalize().nunique() <= 1 else "%a %H %M"
+
+
 def plot_metric_over_time(df, col):
     chart = (
         alt.Chart(df)
         .mark_line()
-        .encode(x=alt.X("date:T", axis=alt.Axis(title="time", format=("%H %M"))), y=col)
+        .encode(
+            x=alt.X("date:T", axis=alt.Axis(title="time", format=time_axis_format(df))),
+            y=col,
+        )
     )
     out_col = OUTDOOR_COLUMNS.get(col)
     if out_col and out_col in df.columns and df[out_col].notna().any():
@@ -331,7 +325,7 @@ def plot_pm_over_time(df, domain=None):
     # Create the Altair chart.
     x_encoding = alt.X(
         "date:T",
-        axis=alt.Axis(title="time", format=("%H %M")),
+        axis=alt.Axis(title="time", format=time_axis_format(pm_df)),
         scale=alt.Scale(domain=domain) if domain else alt.Undefined,
     )
     y_encoding = alt.Y("μg/m³:Q", axis=alt.Axis(title="mass concentration (μg/m³)"))
@@ -390,7 +384,8 @@ st.markdown(f"## {last_record['temp']:.1f} °C")
 st.text("🌡 Temperature")
 if "out_temp" in last_record and pd.notna(last_record["out_temp"]):
     st.text(f"🌳 Outdoor: {last_record['out_temp']:.1f} °C")
-day_temps = load_last_days(1).dropna(subset=["temp"])
+last_24h = load_last_days(1)
+day_temps = last_24h.dropna(subset=["temp"])
 if not day_temps.empty:
     tmin = day_temps.loc[day_temps["temp"].idxmin()]
     tmax = day_temps.loc[day_temps["temp"].idxmax()]
@@ -408,7 +403,11 @@ if "pm25" in last_record and pd.notna(last_record["pm25"]):
 # Evolution over time.
 st.markdown("# Air quality evolution")
 date = st.date_input("Day of interest", datetime.datetime.now())
-filtered_df = load_day(date)
+# Today is a rolling 24h window instead of a stub of a day; past days stay whole.
+is_today = date == datetime.date.today()
+filtered_df = last_24h if is_today else load_day(date)
+if is_today:
+    st.text("Showing the last 24 hours.")
 
 if filtered_df.empty:
     st.info("No measurements recorded for the selected day yet.")
