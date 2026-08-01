@@ -68,6 +68,60 @@ def read_bme280(params):
     return temp, hum, pressure
 
 
+# The CCS811 sits on the VMA342 board at 0x5b instead of its 0x5a default.
+CCS811_ADDRESS = 0x5B
+
+
+def init_ccs811(bus):
+    try:
+        if bus.read_byte_data(CCS811_ADDRESS, 0x20) != 0x81:  # HW_ID
+            print("CCS811 not found; skipping TVOC readings.")
+            return None
+        # Leave the bootloader for the application firmware. APP_START is a bare
+        # register write with no data, which write_byte_data cannot express.
+        if not bus.read_byte_data(CCS811_ADDRESS, 0x00) & 0x80:  # STATUS.FW_MODE
+            bus.i2c_rdwr(smbus2.i2c_msg.write(CCS811_ADDRESS, [0xF4]))
+            time.sleep(0.1)
+        bus.write_byte_data(CCS811_ADDRESS, 0x01, 0x10)  # MEAS_MODE: one reading per second
+    except Exception as exc:
+        print("Failed to initialise CCS811:", exc)
+        return None
+    return bus
+
+
+def read_ccs811(bus, temp, hum):
+    """Return (TVOC ppb, eCO2 ppm), or (None, None) when there is nothing to read.
+
+    Both stay at 0/400 until the sensor has burnt in (~20 minutes from cold, and
+    Sensirion asks for 48 hours of running before the baseline settles).
+    """
+    if not bus:
+        return None, None
+    try:
+        if temp is not None and hum is not None:
+            # ENV_DATA compensates the next reading: humidity in 1/512 %RH and
+            # temperature in 1/512 °C offset by 25 °C, both big-endian 16-bit.
+            bus.write_i2c_block_data(
+                CCS811_ADDRESS,
+                0x05,
+                list(round(hum * 512).to_bytes(2, "big"))
+                + list(round((temp + 25) * 512).to_bytes(2, "big")),
+            )
+        status = bus.read_byte_data(CCS811_ADDRESS, 0x00)
+        if status & 0x01:  # STATUS.ERROR
+            print("CCS811 error 0x%02x" % bus.read_byte_data(CCS811_ADDRESS, 0xE0))
+            return None, None
+        if not status & 0x08:  # STATUS.DATA_READY
+            return None, None
+        eco2_hi, eco2_lo, voc_hi, voc_lo = bus.read_i2c_block_data(
+            CCS811_ADDRESS, 0x02, 4
+        )  # ALG_RESULT_DATA
+        return voc_hi << 8 | voc_lo, eco2_hi << 8 | eco2_lo
+    except Exception as exc:
+        print("Failed to read CCS811:", exc)
+        return None, None
+
+
 def init_sps30():
     if Sps30Device is None or LinuxI2cChannelProvider is None or commands is None:
         print(
@@ -248,6 +302,7 @@ if __name__ == "__main__":
 
     # Initialise sensors.
     bme280_params = init_bme280()
+    ccs811_bus = init_ccs811(bme280_params["bus"])
     sps30_params = init_sps30()
 
     # Take measurements every minute.
@@ -259,11 +314,12 @@ if __name__ == "__main__":
         # Read sensors.
         co2 = read_mhz19()
         temp, hum, pressure = read_bme280(bme280_params)
+        voc, eco2 = read_ccs811(ccs811_bus, temp, hum)
         pm1, pm25, pm4, pm10 = read_sps30(sps30_params)
         out_temp, out_hum, out_pressure, out_wind_speed, out_wind_dir = read_outdoor()
         out_pm25, out_pm10 = read_outdoor_air()
         print(
-            temp, hum, pressure, pm1, pm25, pm4, pm10,
+            temp, hum, pressure, voc, eco2, pm1, pm25, pm4, pm10,
             out_temp, out_hum, out_pressure, out_pm25, out_pm10,
             out_wind_speed, out_wind_dir,
         )
@@ -271,7 +327,7 @@ if __name__ == "__main__":
         # Add measurements to database.
         cur.execute(
             "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, co2, None, None, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id),
+            (now, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id),
         )
         con.commit()
 

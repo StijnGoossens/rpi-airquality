@@ -21,6 +21,7 @@ WEEK_FEATURES = {
     "hum": "Humidity (%)",
     "pressure": "Pressure (hPa)",
     "pm25": "PM2.5 (µg/m³)",
+    "voc": "TVOC (ppb)",
 }
 
 # Outdoor (Open-Meteo) counterparts of indoor metrics, drawn as dashed gray comparison lines.
@@ -399,6 +400,11 @@ if "pm25" in last_record and pd.notna(last_record["pm25"]):
     pm_alert = "🚨" if last_record["pm25"] > 15 else ""
     st.markdown(f"## {last_record['pm25']:.1f} µg/m³ {pm_alert}")
     st.text("🌫 PM2.5")
+if "voc" in last_record and pd.notna(last_record["voc"]):
+    # 250 ppb is the middle of the "good indoor air" band most guidance uses.
+    voc_alert = "🚨" if last_record["voc"] > 250 else ""
+    st.markdown(f"## {last_record['voc']:.0f} ppb {voc_alert}")
+    st.text("🧪 TVOC")
 
 # Evolution over time.
 st.markdown("# Air quality evolution")
@@ -420,6 +426,11 @@ else:
     st.altair_chart(
         plot_metric_over_time(filtered_df, "pressure"), use_container_width=True
     )
+    # Only charted once the CCS811 has logged something; older days have no TVOC.
+    if "voc" in filtered_df.columns and filtered_df["voc"].notna().any():
+        st.altair_chart(
+            plot_metric_over_time(filtered_df, "voc"), use_container_width=True
+        )
     domain = None
     if not filtered_df.empty:
         domain = (filtered_df["date"].min(), filtered_df["date"].max())

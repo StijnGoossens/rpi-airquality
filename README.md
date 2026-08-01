@@ -4,7 +4,7 @@ In this project, we'll monitor several parameters of indoor air quality with a R
 - MH-Z19 -> **CO2**
 - VMA342, consisting of:
     - BME280 -> **temperature** + **humidity** + **air pressure**
-    - CCS811 -> volatile organic compounds (**TVOC**) [Work in progress]
+    - CCS811 -> volatile organic compounds (**TVOC**) + estimated CO2 (**eCO2**)
 - SPS30 -> particulate matter (**PM1.0**, **PM2.5**, **PM4**, **PM10**)
 
 <img src="images/rpi-and-sensors.jpg" height="500" />
@@ -183,7 +183,7 @@ Tip: `i2cdetect -y 1` shows the current I2C connections.
 
 - Ensure the virtual environment is active, then run `pip install RPi.bme280`
 
-Example to try out the CCS811 library:
+Example to try out the BME280 library:
 ```python
 import smbus2
 import bme280
@@ -210,29 +210,41 @@ print(data)
 ```
 
 #### CCS811 (TVOC + eCO2)
-*⚠️ STILL WIP. A BUG OCCURS WHEN READING OUT THE TVOC (and eCO2) VALUES*
 
 [datasheet](https://cdn.sparkfun.com/assets/learn_tutorials/1/4/3/CCS811_Datasheet-DS000459.pdf)
 
-- `pip3 install adafruit-circuitpython-ccs811`
+No extra package needed: `monitor.py` drives the sensor over `smbus2`, which is already installed for the BME280. The `adafruit-circuitpython-ccs811` route needs the whole Blinka stack and used to fail on this Pi, so it is no longer used.
 
-Example to try out the [CCS811 library](https://pypi.org/project/adafruit-circuitpython-ccs811/):
+The CCS811 does clock stretching, which the Raspberry Pi's hardware I2C only tolerates at a low bus speed — the `dtparam=i2c_arm_baudrate=10000` line from the VMA342 section above is what makes the reads work.
+
+Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default is `0x5a`](https://github.com/adafruit/Adafruit_CircuitPython_CCS811/blob/main/adafruit_ccs811.py)). Check it is seen with `i2cdetect -y 1`.
+
+Two things to know about the readings:
+- The sensor boots into its bootloader and only measures after an `APP_START`, which `init_ccs811()` sends.
+- TVOC sits at 0 ppb and eCO2 at 400 ppm until the sensor has burnt in — roughly 20 minutes from a cold start, and Sensirion asks for 48 hours of run time before the baseline settles. Empty readings at first are expected, not a fault.
+
+`monitor.py` also feeds the BME280's temperature and humidity into the CCS811's `ENV_DATA` register each cycle, since its output is compensated for both.
+
+Example to sanity-check the sensor interactively:
 ```python
-import board
-import adafruit_ccs811
+import time
+import smbus2
 
-i2c = board.I2C()  # uses board.SCL and board.SDA
-ccs811 = adafruit_ccs811.CCS811(i2c, 0x5b)
+bus = smbus2.SMBus(1)
+print("HW_ID:", hex(bus.read_byte_data(0x5B, 0x20)))  # expect 0x81
 
-# Wait for the sensor to be ready
-while not ccs811.data_ready:
-    pass
+if not bus.read_byte_data(0x5B, 0x00) & 0x80:  # not in application mode yet
+    bus.i2c_rdwr(smbus2.i2c_msg.write(0x5B, [0xF4]))  # APP_START
+    time.sleep(0.1)
+bus.write_byte_data(0x5B, 0x01, 0x10)  # MEAS_MODE: one reading per second
+time.sleep(2)
 
 while True:
-    print("CO2: {} PPM, TVOC: {} PPB".format(ccs811.eco2, ccs811.tvoc))
-    time.sleep(0.5)
+    if bus.read_byte_data(0x5B, 0x00) & 0x08:  # DATA_READY
+        d = bus.read_i2c_block_data(0x5B, 0x02, 4)
+        print("eCO2: {} PPM, TVOC: {} PPB".format(d[0] << 8 | d[1], d[2] << 8 | d[3]))
+    time.sleep(2)
 ```
-Note that `0x5b` is the I2C address of the CCS811 on the VMA342 board ([default is `0x5a`](https://github.com/adafruit/Adafruit_CircuitPython_CCS811/blob/main/adafruit_ccs811.py)).
 
 ### SPS30 (particulate matter)
 - Uses the same I2C bus as the VMA342 board. Connect `VDD` to 5V, `GND` to ground and wire `SDA`/`SCL` to the Raspberry Pi's I2C pins as shown in the wiring diagram above.
