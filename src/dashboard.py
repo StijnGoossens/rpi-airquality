@@ -363,13 +363,19 @@ st.markdown(
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .reportview-container .main .block-container {padding-top: 0; padding-bottom: 0}
-    /* Streamlit 0.62 predates st.columns, so the metrics are laid out with a
-       flexbox grid instead. Cards wrap on their own, which also keeps the
-       dashboard readable on a phone. Colours are inherited so the grid follows
-       whichever Streamlit theme is active. */
-    .metrics {display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem;}
+    /* Streamlit 0.62 predates st.columns, so the metrics are laid out with a CSS
+       grid instead. auto-fit fits as many 12rem tracks as the window allows, so
+       the cards reflow down to one column on a phone. Grid rather than flexbox
+       because a leftover card on the last row keeps its column width here,
+       where a flex item would grow to span the whole row on its own. Colours
+       are inherited so the grid follows whichever Streamlit theme is active. */
+    .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
     .metric {
-        flex: 1 1 9rem;
         padding: 0.6rem 0.9rem;
         border: 1px solid rgba(128, 128, 128, 0.35);
         border-radius: 0.5rem;
