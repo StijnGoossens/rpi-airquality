@@ -363,10 +363,32 @@ st.markdown(
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .reportview-container .main .block-container {padding-top: 0; padding-bottom: 0}
+    /* Streamlit 0.62 predates st.columns, so the metrics are laid out with a
+       flexbox grid instead. Cards wrap on their own, which also keeps the
+       dashboard readable on a phone. Colours are inherited so the grid follows
+       whichever Streamlit theme is active. */
+    .metrics {display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem;}
+    .metric {
+        flex: 1 1 9rem;
+        padding: 0.6rem 0.9rem;
+        border: 1px solid rgba(128, 128, 128, 0.35);
+        border-radius: 0.5rem;
+    }
+    .metric-value {font-size: 1.6rem; font-weight: 600; line-height: 1.3;}
+    .metric-label {font-size: 0.9rem; opacity: 0.75;}
+    .metric-sub {font-size: 0.8rem; opacity: 0.6;}
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+def metric_card(value: str, label: str, *extras: str) -> str:
+    subs = "".join(f"<div class='metric-sub'>{extra}</div>" for extra in extras)
+    return (
+        f"<div class='metric'><div class='metric-value'>{value}</div>"
+        f"<div class='metric-label'>{label}</div>{subs}</div>"
+    )
 
 # The current metrics.
 st.markdown("# Current air quality")
@@ -379,32 +401,34 @@ if age > pd.Timedelta(minutes=10):
     )
 # room = st.text_input("Room", on_change=set_room)
 co2_alert = "🚨" if last_record["co2"] > 900 else ""
-st.markdown(f"## {last_record['co2']:.0f} ppm {co2_alert}")
-st.text("😶‍🌫️ CO2 level")
-st.markdown(f"## {last_record['temp']:.1f} °C")
-st.text("🌡 Temperature")
+cards = [metric_card(f"{last_record['co2']:.0f} ppm {co2_alert}", "😶‍🌫️ CO2 level")]
+
+temp_extras = []
 if "out_temp" in last_record and pd.notna(last_record["out_temp"]):
-    st.text(f"🌳 Outdoor: {last_record['out_temp']:.1f} °C")
+    temp_extras.append(f"🌳 Outdoor: {last_record['out_temp']:.1f} °C")
 last_24h = load_last_days(1)
 day_temps = last_24h.dropna(subset=["temp"])
 if not day_temps.empty:
     tmin = day_temps.loc[day_temps["temp"].idxmin()]
     tmax = day_temps.loc[day_temps["temp"].idxmax()]
-    st.text(f"↓ {tmin['temp']:.1f} °C at {tmin['date'].strftime('%H:%M')} (last 24h)")
-    st.text(f"↑ {tmax['temp']:.1f} °C at {tmax['date'].strftime('%H:%M')} (last 24h)")
-st.markdown(f"## {last_record['hum']:.0f} %")
-st.text("💧 Humidity")
+    temp_extras.append(f"↓ {tmin['temp']:.1f} °C at {tmin['date'].strftime('%H:%M')} (last 24h)")
+    temp_extras.append(f"↑ {tmax['temp']:.1f} °C at {tmax['date'].strftime('%H:%M')} (last 24h)")
+cards.append(metric_card(f"{last_record['temp']:.1f} °C", "🌡 Temperature", *temp_extras))
+
+hum_extras = []
 if "out_hum" in last_record and pd.notna(last_record["out_hum"]):
-    st.text(f"🌳 Outdoor: {last_record['out_hum']:.0f} %")
+    hum_extras.append(f"🌳 Outdoor: {last_record['out_hum']:.0f} %")
+cards.append(metric_card(f"{last_record['hum']:.0f} %", "💧 Humidity", *hum_extras))
+
 if "pm25" in last_record and pd.notna(last_record["pm25"]):
     pm_alert = "🚨" if last_record["pm25"] > 15 else ""
-    st.markdown(f"## {last_record['pm25']:.1f} µg/m³ {pm_alert}")
-    st.text("🌫 PM2.5")
+    cards.append(metric_card(f"{last_record['pm25']:.1f} µg/m³ {pm_alert}", "🌫 PM2.5"))
 if "voc" in last_record and pd.notna(last_record["voc"]):
     # 250 ppb is the middle of the "good indoor air" band most guidance uses.
     voc_alert = "🚨" if last_record["voc"] > 250 else ""
-    st.markdown(f"## {last_record['voc']:.0f} ppb {voc_alert}")
-    st.text("🧪 TVOC")
+    cards.append(metric_card(f"{last_record['voc']:.0f} ppb {voc_alert}", "🧪 TVOC"))
+
+st.markdown(f"<div class='metrics'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
 # Evolution over time.
 st.markdown("# Air quality evolution")
