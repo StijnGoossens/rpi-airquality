@@ -33,7 +33,7 @@ A Streamlit dashboard will allow you to monitor the current air quality as well 
 - Jumper cables (male-female & some male-male)
 - Ethernet cable for the initial setup
 
-<sup>*</sup>I used a Raspberry Pi model 2B for this project. Other models likely work as well, but weren't tested.
+<sup>*</sup>I used a Raspberry Pi 3 Model B+ for this project. Other models likely work as well, but weren't tested.
 
 <sup>**</sup>The MH-Z19 sensor comes in [multiple versions](https://emariete.com/en/sensor-co2-mh-z19b/). I used the MH-Z19B. The [mh-z19 python library](https://pypi.org/project/mh-z19/) seems to support at least the MH-Z19 and MH-Z19B. If your sensor doesn't come with output pins (like mine), you'll have to solder some stacking headers yourself.
 
