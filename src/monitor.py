@@ -19,7 +19,8 @@ except ImportError:
     Sps30Device = None  # type: ignore[assignment]
     commands = None  # type: ignore[assignment]
 
-from config import DB_PATH, LATITUDE, LONGITUDE, NTFY_TOPIC
+from config import DB_PATH, LATITUDE, LONGITUDE
+from utils import send_notification
 
 POLL_FREQUENCY_SECONDS = 300
 # Close-the-windows alert: fires once outdoor has risen to within this many degrees of
@@ -213,21 +214,6 @@ def read_outdoor():
 
 def read_outdoor_air():
     return _fetch_current(AIR_QUALITY_URL, ("pm2_5", "pm10"))
-
-
-def send_notification(title, message):
-    if not NTFY_TOPIC:
-        return
-    try:
-        req = urllib.request.Request(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=message.encode("utf-8"),
-            headers={"Title": title, "Priority": "high", "Tags": "warning"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as exc:
-        print("Failed to send notification:", exc)
 
 
 def create_table(sql_query):
