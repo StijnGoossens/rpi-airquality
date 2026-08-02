@@ -316,6 +316,30 @@ This will start the monitoring script and Streamlit dashboard on startup. Logs (
 
 Keep the Streamlit check (`pgrep -f "bin/streamlit"`) inside its own script file rather than inline in the crontab. Cron runs a crontab line via `sh -c '<the whole line>'`, so a pattern like `"streamlit run"` written directly in that line appears in the invoking shell's own command text — `pgrep -f` then matches that shell itself and always reports "running," silently disabling the restart. This is why the watchdog didn't fire for two days in production. `scripts/dashboard_watchdog.sh` avoids it two ways: the check lives in a separate process (`sh path/to/script.sh` doesn't contain the pattern), and the pattern itself (`bin/streamlit`) matches the venv binary path rather than the generic `streamlit run` text. The same trap applies when testing these checks by hand over SSH — chaining a `pgrep -f "<pattern>"` into the same command that starts or checks the process re-creates the self-match; verify with `ps aux | grep -i streamlit | grep -v grep` or a real HTTP request instead.
 
+### Daily morning summary
+
+`src/summary.py` pushes one ntfy notification at 07:00 so you don't have to open the dashboard to know whether anything happened overnight. Add to `crontab -e`:
+
+```
+0 7 * * * $HOME/venvs/airquality/bin/python $HOME/Documents/rpi-airquality/src/summary.py >> $HOME/cronjoblog-summary 2>&1
+```
+
+Preview it without sending anything with `python3 src/summary.py --dry-run`, and check the message-building logic with `python3 src/summary.py --demo`. It is stdlib-only (no pandas) and opens the database read-only, so it can never contend with `monitor.py`'s writes.
+
+Only the weather line and the stat footer are unconditional; the CO2, particulate matter and data-gap blocks appear only when they exceed a threshold, so a quiet morning is three lines. The footer always carries the peak numbers so that "no alert" is distinguishable from a script that silently died.
+
+The thresholds in `summary.py` are chosen from published guidance rather than from what this particular flat happens to produce:
+
+| Threshold | Value | Basis |
+| --- | --- | --- |
+| CO2 | 900 ppm | Belgian indoor air quality act target value; within the EN 16798-1 Cat I band (~+550 ppm over outdoor). Read it as a ventilation-rate proxy, not a toxicity limit — direct effects need thousands of ppm. |
+| PM2.5 peak | 35 µg/m³ | EPA AQI-100 boundary, used here as a "a source is active right now" detector. Not a health limit: WHO defines no short-term guideline. |
+| PM2.5 24h mean | 15 µg/m³ | WHO 2021 24-hour guideline. |
+| PM10 24h mean | 45 µg/m³ | WHO 2021 24-hour guideline. |
+| Outdoor PM2.5 gate | 15 µg/m³ | Suppresses the "air out now" advice rather than telling you to ventilate into worse air than the WHO guideline. |
+
+Note that WHO states there is no threshold below which PM2.5 is harmless, so these are action triggers, not safety lines. The peak and 24-hour checks are deliberately both present: a one-hour spike would need ~290 µg/m³ to drag a daily mean over 15, so short events are invisible to the 24h check, while a long mild haze breaches the guideline without ever tripping the peak.
+
 ### Weekly database backup to Google Drive
 - `sudo apt install rclone` on the Pi.
 - On a machine with a browser: `rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ" --auth-no-open-browser` (the base64 blob sets `scope: drive.file`, so rclone can only touch files it created itself — it never sees the rest of your Drive). Complete the OAuth flow in the browser.
