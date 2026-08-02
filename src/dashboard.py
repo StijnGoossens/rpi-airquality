@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from config import DB_PATH
+from utils import baseline_deviation
 
 NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
 EXPORT_TZ = ZoneInfo("Europe/Brussels")  # matches _normalize_dataframe's localisation
@@ -27,6 +28,12 @@ WEEK_FEATURES = {
 # Outdoor (Open-Meteo) counterparts of indoor metrics, drawn as dashed gray comparison lines.
 OUTDOOR_COLUMNS = {"temp": "out_temp", "hum": "out_hum", "pressure": "out_pressure"}
 OUTDOOR_COLOR = "#888888"
+
+# How far above its own 24h baseline a TVOC reading has to sit before it counts
+# as a spike, in robust z-scores. 3.5 is the usual cut-off for this measure.
+# The CCS811's ppb output re-baselines itself continuously, so there is no
+# absolute number to threshold against -- only "unusual for this room lately".
+VOC_SPIKE_DEVIATION = 3.5
 
 PM_COLUMNS = ["pm1", "pm25", "pm4", "pm10"]
 PM_LABELS = {
@@ -247,7 +254,7 @@ def time_axis_format(df) -> str:
     return "%H %M" if df["date"].dt.normalize().nunique() <= 1 else "%a %H %M"
 
 
-def plot_metric_over_time(df, col):
+def plot_metric_over_time(df, col, baseline=None):
     chart = (
         alt.Chart(df)
         .mark_line()
@@ -256,6 +263,19 @@ def plot_metric_over_time(df, col):
             y=col,
         )
     )
+    if baseline is not None:
+        # For a self-baselining sensor the line height means little on its own;
+        # what it does either side of this reference is the whole reading.
+        chart += (
+            alt.Chart(pd.DataFrame({"baseline": [baseline]}))
+            .mark_rule(color=OUTDOOR_COLOR, strokeDash=[4, 4])
+            .encode(y=alt.Y("baseline:Q", title=col))
+        )
+        chart = chart.properties(
+            title=alt.TitleParams(
+                "dashed gray = normal for this window", fontSize=11, anchor="end"
+            )
+        )
     out_col = OUTDOOR_COLUMNS.get(col)
     if out_col and out_col in df.columns and df[out_col].notna().any():
         outdoor = (
@@ -430,9 +450,27 @@ if "pm25" in last_record and pd.notna(last_record["pm25"]):
     pm_alert = "🚨" if last_record["pm25"] > 15 else ""
     cards.append(metric_card(f"{last_record['pm25']:.1f} µg/m³ {pm_alert}", "🌫 PM2.5"))
 if "voc" in last_record and pd.notna(last_record["voc"]):
-    # 250 ppb is the middle of the "good indoor air" band most guidance uses.
-    voc_alert = "🚨" if last_record["voc"] > 250 else ""
-    cards.append(metric_card(f"{last_record['voc']:.0f} ppb {voc_alert}", "🧪 TVOC"))
+    # The ppb figure is not comparable to any guideline or to another device, so
+    # it is judged against this room's own recent history instead. See
+    # baseline_deviation() for why.
+    voc = last_record["voc"]
+    voc_alert, voc_extras = "", []
+    deviation = baseline_deviation(last_24h["voc"].tolist(), voc)
+    if deviation is not None:
+        voc_baseline, voc_z = deviation
+        voc_extras.append(f"📉 24h normal: {voc_baseline:.0f} ppb")
+        if voc_z >= VOC_SPIKE_DEVIATION:
+            voc_alert = "🚨"
+            # A zero baseline is what a still-conditioning sensor looks like,
+            # and there is no meaningful multiple of zero to quote.
+            voc_extras.append(
+                f"↑ {voc / voc_baseline:.1f}× the 24h normal"
+                if voc_baseline > 0
+                else "↑ well above the 24h normal"
+            )
+    else:
+        voc_extras.append("📉 building up 24h baseline")
+    cards.append(metric_card(f"{voc:.0f} ppb {voc_alert}", "🧪 TVOC", *voc_extras))
 
 st.markdown(f"<div class='metrics'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
@@ -458,8 +496,13 @@ else:
     )
     # Only charted once the CCS811 has logged something; older days have no TVOC.
     if "voc" in filtered_df.columns and filtered_df["voc"].notna().any():
+        # Baselined over the window on screen, not the rolling 24h the card uses,
+        # so the line still means "normal here" when looking back at a past day.
         st.altair_chart(
-            plot_metric_over_time(filtered_df, "voc"), use_container_width=True
+            plot_metric_over_time(
+                filtered_df, "voc", baseline=filtered_df["voc"].median()
+            ),
+            use_container_width=True,
         )
     domain = None
     if not filtered_df.empty:
