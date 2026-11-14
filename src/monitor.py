@@ -173,7 +173,7 @@ OUTDOOR_URL = (
     "https://api.open-meteo.com/v1/forecast"
     f"?latitude={LATITUDE}&longitude={LONGITUDE}"
     "&current=temperature_2m,relative_humidity_2m,surface_pressure,"
-    "wind_speed_10m,wind_direction_10m"
+    "wind_speed_10m,wind_direction_10m,shortwave_radiation"
 )
 # Outdoor particulates from the CAMS model (hourly, ~10 km resolution).
 AIR_QUALITY_URL = (
@@ -199,7 +199,8 @@ def _fetch_current(url, keys, attempts=3, retry_delay_seconds=5):
 
 
 def read_outdoor():
-    # Wind speed in km/h, direction in degrees (0 = north).
+    # Wind speed in km/h, direction in degrees (0 = north), solar radiation in W/m²
+    # on a horizontal surface.
     return _fetch_current(
         OUTDOOR_URL,
         (
@@ -208,6 +209,7 @@ def read_outdoor():
             "surface_pressure",
             "wind_speed_10m",
             "wind_direction_10m",
+            "shortwave_radiation",
         ),
     )
 
@@ -270,6 +272,7 @@ if __name__ == "__main__":
         "out_pm10",
         "out_wind_speed",
         "out_wind_dir",
+        "out_solar",
     ):
         ensure_column("records", column, "real")
 
@@ -302,18 +305,18 @@ if __name__ == "__main__":
         temp, hum, pressure = read_bme280(bme280_params)
         voc, eco2 = read_ccs811(ccs811_bus, temp, hum)
         pm1, pm25, pm4, pm10 = read_sps30(sps30_params)
-        out_temp, out_hum, out_pressure, out_wind_speed, out_wind_dir = read_outdoor()
+        out_temp, out_hum, out_pressure, out_wind_speed, out_wind_dir, out_solar = read_outdoor()
         out_pm25, out_pm10 = read_outdoor_air()
         print(
             temp, hum, pressure, voc, eco2, pm1, pm25, pm4, pm10,
             out_temp, out_hum, out_pressure, out_pm25, out_pm10,
-            out_wind_speed, out_wind_dir,
+            out_wind_speed, out_wind_dir, out_solar,
         )
 
         # Add measurements to database.
         cur.execute(
-            "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, session_id),
+            "INSERT INTO records (date, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, out_solar, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, co2, voc, eco2, temp, hum, pressure, pm1, pm25, pm4, pm10, out_temp, out_hum, out_pressure, out_pm25, out_pm10, out_wind_speed, out_wind_dir, out_solar, session_id),
         )
         con.commit()
 
