@@ -346,6 +346,32 @@ The thresholds in `summary.py` are chosen from published guidance rather than fr
 
 Note that WHO states there is no threshold below which PM2.5 is harmless, so these are action triggers, not safety lines. The peak and 24-hour checks are deliberately both present: a one-hour spike would need ~290 µg/m³ to drag a daily mean over 15, so short events are invisible to the 24h check, while a long mild haze breaches the guideline without ever tripping the peak.
 
+### Zigbee room sensors (optional)
+
+`src/zigbee_receiver.py` stores readings from battery-powered Zigbee sensors in other rooms, via [Zigbee2MQTT](https://www.zigbee2mqtt.io/) and a Mosquitto broker on the Pi. Each message becomes a row in the `zigbee_records` table of the same database: arrival time, room, temperature, humidity, battery, link quality and window contact.
+
+- Install the client tools the receiver reads from: `sudo apt install mosquitto mosquitto-clients`. No extra Python packages are needed.
+- In Zigbee2MQTT's `configuration.yaml`, turn off the replay of cached states on startup. Readings are timestamped on arrival, so a replay would store old values as new ones and make a dead sensor look alive:
+```yaml
+advanced:
+  cache_state_send_on_startup: false
+```
+- Map each Zigbee2MQTT device name to a room in the gitignored `src/location.py`, and optionally name the Pi's own room for the charts:
+```python
+ZIGBEE_ROOMS = {"living_sensor": "living room", "office_sensor": "office"}
+PI_ROOM = "bedroom"
+```
+- Add the watchdog to `crontab -e`. It also does the first start, so there is no `@reboot` line:
+```
+*/5 * * * * sh $HOME/Documents/rpi-airquality/scripts/zigbee_watchdog.sh >> $HOME/cronjoblog-zigbee 2>&1
+```
+
+The dashboard then lists each room's latest temperature and humidity on the cards and draws every room as its own line in the temperature and humidity charts, with a Rooms picker to hide some. The morning summary names any room in `ZIGBEE_ROOMS` that has been silent for more than `ZIGBEE_SILENT_HOURS` (6 hours by default, in `summary.py`). Check the message parsing with `python3 src/zigbee_receiver.py --demo`.
+
+### Calibrating the BME280 humidity
+
+If a side-by-side comparison shows the BME280's humidity is consistently off, set `BME280_HUM_OFFSET` (in percentage points, e.g. `4.0`) in `src/location.py`. The dashboard adds it when displaying the readings. The database and the CSV export keep the raw values, so the offset can be changed later and applies to the whole history.
+
 ### Weekly database backup to Google Drive
 - `sudo apt install rclone` on the Pi.
 - On a machine with a browser: `rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ" --auth-no-open-browser` (the base64 blob sets `scope: drive.file`, so rclone can only touch files it created itself — it never sees the rest of your Drive). Complete the OAuth flow in the browser.

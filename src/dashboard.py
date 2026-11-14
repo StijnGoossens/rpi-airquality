@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from config import DB_PATH
+from config import BME280_HUM_OFFSET, DB_PATH, PI_ROOM, ZIGBEE_ROOMS
 from utils import baseline_deviation
 
 NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
@@ -28,6 +28,27 @@ WEEK_FEATURES = {
 # Outdoor (Open-Meteo) counterparts of indoor metrics, drawn as dashed gray comparison lines.
 OUTDOOR_COLUMNS = {"temp": "out_temp", "hum": "out_hum", "pressure": "out_pressure"}
 OUTDOOR_COLOR = "#888888"
+
+# Every room the charts can show: the Pi's own, then the Zigbee rooms.
+ROOMS = [PI_ROOM, *sorted(set(ZIGBEE_ROOMS.values()) - {PI_ROOM})]
+# A fixed colour per room, so hiding one never repaints the rest. The Pi's room keeps
+# the red its lines have always had; teal and violet stay apart from that red under
+# red-green colour blindness.
+PI_COLOR = "#d0421b"
+# ponytail: two hues for two sensors; a third room reuses teal, add a validated hue then.
+ZIGBEE_COLORS = ["#1a9e9e", "#8e5cd9"]
+ROOM_COLOR = {PI_ROOM: PI_COLOR} | {
+    room: ZIGBEE_COLORS[i % len(ZIGBEE_COLORS)] for i, room in enumerate(ROOMS[1:])
+}
+# A one-row legend above the plot, instead of a column that narrows it.
+ROOM_LEGEND = alt.Legend(orient="top", title=None)
+
+
+def room_scale(rooms) -> alt.Scale:
+    """Colour scale naming just these rooms, each in its fixed colour."""
+    present = set(rooms)
+    named = [room for room in ROOMS if room in present]
+    return alt.Scale(domain=named, range=[ROOM_COLOR[room] for room in named])
 
 # How far above its own 24h baseline a TVOC reading has to sit before it counts
 # as a spike, in robust z-scores. 3.5 is the usual cut-off for this measure.
@@ -60,8 +81,15 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["date"] = df["date"].dt.tz_convert("Europe/Brussels")
 
-    numeric_columns = [c for c in df.columns if c != "date"]
+    numeric_columns = [c for c in df.columns if c not in ("date", "room")]
     df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors="coerce")
+    return df
+
+
+def _normalize_records(df: pd.DataFrame) -> pd.DataFrame:
+    # Only for the Pi's own table: the Zigbee sensors don't share the BME280's offset.
+    df = _normalize_dataframe(df)
+    df["hum"] += BME280_HUM_OFFSET
     return df
 
 
@@ -71,7 +99,7 @@ def load_records(limit: int | None = None) -> pd.DataFrame:
         query += f" LIMIT {limit}"
     with sqlite3.connect(DB_PATH) as con:
         df = pd.read_sql_query(query, con)
-    return _normalize_dataframe(df).sort_values("date")
+    return _normalize_records(df).sort_values("date")
 
 
 def load_day(day: datetime.date) -> pd.DataFrame:
@@ -82,7 +110,7 @@ def load_day(day: datetime.date) -> pd.DataFrame:
             con,
             params=(f"{day.isoformat()}%",),
         )
-    return _normalize_dataframe(df)
+    return _normalize_records(df)
 
 
 def load_last_days(days: int = 7) -> pd.DataFrame:
@@ -96,6 +124,24 @@ def load_last_days(days: int = 7) -> pd.DataFrame:
             con,
             params=(cutoff,),
         )
+    return _normalize_records(df)
+
+
+def load_room_readings(start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    # Stored dates are local ISO strings, so lexicographic comparison works.
+    window = (start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S"))
+    try:
+        with sqlite3.connect(DB_PATH) as con:
+            df = pd.read_sql_query(
+                "SELECT date, room, temp, hum FROM zigbee_records "
+                "WHERE date >= ? AND date <= ? ORDER BY date",
+                con,
+                params=window,
+            )
+    except pd.errors.DatabaseError:
+        # The table only exists once zigbee_receiver.py has run; without Zigbee
+        # sensors the dashboard simply has no room charts.
+        return pd.DataFrame()
     return _normalize_dataframe(df)
 
 
@@ -183,7 +229,13 @@ def night_spans(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timesta
     return spans
 
 
-def plot_week_overview(df: pd.DataFrame, col: str, label: str) -> alt.Chart | None:
+def plot_week_overview(
+    df: pd.DataFrame,
+    col: str,
+    label: str,
+    rooms: pd.DataFrame | None = None,
+    shown: list[str] = ROOMS,
+) -> alt.Chart | None:
     data = df[["date", col]].dropna()
     if data.empty:
         return None
@@ -205,10 +257,30 @@ def plot_week_overview(df: pd.DataFrame, col: str, label: str) -> alt.Chart | No
     raw_line = (
         alt.Chart(raw).mark_line(strokeWidth=0.5, color="#e8763a", opacity=0.6).encode(x=x, y=y)
     )
-    hourly_line = alt.Chart(hourly).mark_line(strokeWidth=2.5, color="#d0421b").encode(
+    hourly_line = alt.Chart(hourly).mark_line(strokeWidth=2.5, color=PI_COLOR).encode(
         x=x, y=y, tooltip=["date:T", alt.Tooltip(f"{col}:Q", format=".1f", title=label)]
     )
-    chart = bands + raw_line + hourly_line
+    show_pi = PI_ROOM in shown
+    chart = bands + raw_line + hourly_line if show_pi else bands
+
+    if rooms is not None and not rooms.empty:
+        room_hourly = (
+            rooms.set_index("date")
+            .groupby("room")[col]
+            .resample("1h")
+            .mean()
+            .dropna()
+            .reset_index()
+        )
+        room_hourly = room_hourly[room_hourly["room"].isin(shown)]
+        # The Pi's line is drawn above, but naming it here lets the legend explain the red.
+        named = {*room_hourly["room"], *([PI_ROOM] if show_pi else [])}
+        chart += alt.Chart(room_hourly).mark_line(strokeWidth=2).encode(
+            x=x,
+            y=y,
+            color=alt.Color("room:N", scale=room_scale(named), legend=ROOM_LEGEND),
+            tooltip=["date:T", "room:N", alt.Tooltip(f"{col}:Q", format=".1f", title=label)],
+        )
 
     out_col = OUTDOOR_COLUMNS.get(col)
     if out_col and out_col in df.columns and df[out_col].notna().any():
@@ -223,7 +295,7 @@ def plot_week_overview(df: pd.DataFrame, col: str, label: str) -> alt.Chart | No
             tooltip=["date:T", alt.Tooltip(f"{out_col}:Q", format=".1f", title="Outdoor")],
         )
 
-    if col == "temp":
+    if col == "temp" and show_pi:
         minima = [
             {"date": chunk.idxmin(), "y": chunk.min(), "label": f"{chunk.min():.1f}°C"}
             for n0, n1 in night_spans(start, end)
@@ -294,6 +366,62 @@ def plot_metric_over_time(df, col, baseline=None):
             title=alt.TitleParams("solid = indoor, dashed gray = outdoor", fontSize=11, anchor="end")
         )
     return chart
+
+
+def plot_rooms(df, rooms, col, shown):
+    """One line per shown room, the Pi's own included, with outdoor dashed gray as elsewhere."""
+    lines = pd.concat(
+        [df[["date", col]].assign(room=PI_ROOM), rooms[["date", "room", col]]]
+    ).dropna(subset=[col])
+    # The Zigbee sensors report on change, so 15-minute means put every room on one
+    # time grid and keep a week of data light in the browser.
+    lines = (
+        lines.set_index("date")
+        .groupby("room")[col]
+        .resample("15min")
+        .mean()
+        .dropna()
+        .reset_index()
+    )
+    lines = lines[lines["room"].isin(shown)]
+    label = WEEK_FEATURES[col]
+    chart = (
+        alt.Chart(lines)
+        .mark_line()
+        .encode(
+            x=alt.X("date:T", axis=alt.Axis(title=None, format=time_axis_format(lines))),
+            y=alt.Y(f"{col}:Q", title=label, scale=alt.Scale(zero=False)),
+            color=alt.Color("room:N", scale=room_scale(lines["room"]), legend=ROOM_LEGEND),
+            tooltip=["date:T", "room:N", alt.Tooltip(f"{col}:Q", format=".1f", title=label)],
+        )
+    )
+    out_col = OUTDOOR_COLUMNS[col]
+    if out_col in df.columns and df[out_col].notna().any():
+        outdoor = (
+            df.set_index("date")[out_col].resample("15min").mean().dropna().reset_index()
+        )
+        chart += (
+            alt.Chart(outdoor)
+            .mark_line(color=OUTDOOR_COLOR, strokeDash=[5, 3])
+            .encode(
+                x="date:T",
+                y=alt.Y(f"{out_col}:Q", title=label, scale=alt.Scale(zero=False)),
+                tooltip=["date:T", alt.Tooltip(f"{out_col}:Q", format=".1f", title="Outdoor")],
+            )
+        )
+    return chart.properties(
+        title=alt.TitleParams("per room, dashed gray = outdoor", fontSize=11, anchor="end")
+    )
+
+
+def show_room_charts(df, cols, shown):
+    """Per-room charts for cols; False when there's no Zigbee data to chart."""
+    rooms = load_room_readings(df["date"].min(), df["date"].max())
+    if rooms.empty:
+        return False
+    for col in cols:
+        st.altair_chart(plot_rooms(df, rooms, col, shown), use_container_width=True)
+    return True
 
 
 def plot_pm_over_time(df, domain=None):
@@ -418,8 +546,27 @@ def metric_card(value: str, label: str, *extras: str) -> str:
 
 # The current metrics.
 st.markdown("# Current air quality")
-st.text(f"🗓 {last_record['date'].strftime('%d-%m-%Y %H:%M')}")
-age = pd.Timestamp.now(tz="Europe/Brussels") - last_record["date"]
+now = pd.Timestamp.now(tz="Europe/Brussels")
+# Latest temperature and humidity per Zigbee room. A room silent for over 24h drops
+# off the cards; the daily summary has flagged it as silent long before that.
+room_readings = load_room_readings(now - pd.Timedelta(days=1), now)
+latest_rooms = room_readings.groupby("room").last() if not room_readings.empty else room_readings
+
+
+def room_extras(col: str, fmt: str, unit: str) -> list[str]:
+    extras = []
+    for room, reading in latest_rooms.iterrows():
+        if pd.notna(reading[col]):
+            hours = int((now - reading["date"]) / pd.Timedelta(hours=1))
+            stale = f" ({hours}h ago)" if hours >= 2 else ""
+            extras.append(f"🏠 {room}: {reading[col]:{fmt}} {unit}{stale}")
+    return extras
+
+
+# With other rooms on the cards, say which room the big numbers are from.
+where = f"  📍 {PI_ROOM}" if not latest_rooms.empty else ""
+st.text(f"🗓 {last_record['date'].strftime('%d-%m-%Y %H:%M')}{where}")
+age = now - last_record["date"]
 if age > pd.Timedelta(minutes=10):
     st.warning(
         f"⚠️ Last measurement is {int(age.total_seconds() // 60)} minutes old "
@@ -429,7 +576,7 @@ if age > pd.Timedelta(minutes=10):
 co2_alert = "🚨" if last_record["co2"] > 900 else ""
 cards = [metric_card(f"{last_record['co2']:.0f} ppm {co2_alert}", "😶‍🌫️ CO2 level")]
 
-temp_extras = []
+temp_extras = room_extras("temp", ".1f", "°C")
 if "out_temp" in last_record and pd.notna(last_record["out_temp"]):
     temp_extras.append(f"🌳 Outdoor: {last_record['out_temp']:.1f} °C")
 last_24h = load_last_days(1)
@@ -441,7 +588,7 @@ if not day_temps.empty:
     temp_extras.append(f"↑ {tmax['temp']:.1f} °C at {tmax['date'].strftime('%H:%M')} (last 24h)")
 cards.append(metric_card(f"{last_record['temp']:.1f} °C", "🌡 Temperature", *temp_extras))
 
-hum_extras = []
+hum_extras = room_extras("hum", ".0f", "%")
 if "out_hum" in last_record and pd.notna(last_record["out_hum"]):
     hum_extras.append(f"🌳 Outdoor: {last_record['out_hum']:.0f} %")
 cards.append(metric_card(f"{last_record['hum']:.0f} %", "💧 Humidity", *hum_extras))
@@ -477,6 +624,8 @@ st.markdown(f"<div class='metrics'>{''.join(cards)}</div>", unsafe_allow_html=Tr
 # Evolution over time.
 st.markdown("# Air quality evolution")
 date = st.date_input("Day of interest", datetime.datetime.now())
+# One room filter for the temperature and humidity charts here and in the 7 days below.
+shown_rooms = st.multiselect("Rooms", ROOMS, default=ROOMS) if len(ROOMS) > 1 else ROOMS
 # Today is a rolling 24h window instead of a stub of a day; past days stay whole.
 is_today = date == datetime.date.today()
 filtered_df = last_24h if is_today else load_day(date)
@@ -487,10 +636,11 @@ if filtered_df.empty:
     st.info("No measurements recorded for the selected day yet.")
 else:
     st.altair_chart(plot_metric_over_time(filtered_df, "co2"), use_container_width=True)
-    st.altair_chart(
-        plot_metric_over_time(filtered_df, "temp"), use_container_width=True
-    )
-    st.altair_chart(plot_metric_over_time(filtered_df, "hum"), use_container_width=True)
+    # The per-room charts already include this room's line and outdoor, so they
+    # replace the single-room ones whenever there's Zigbee data for the window.
+    if not show_room_charts(filtered_df, ["temp", "hum"], shown_rooms):
+        for col in ("temp", "hum"):
+            st.altair_chart(plot_metric_over_time(filtered_df, col), use_container_width=True)
     st.altair_chart(
         plot_metric_over_time(filtered_df, "pressure"), use_container_width=True
     )
@@ -521,7 +671,14 @@ else:
     feature = st.selectbox(
         "Feature", available, index=available.index("temp"), format_func=WEEK_FEATURES.get
     )
-    week_chart = plot_week_overview(week_df, feature, WEEK_FEATURES[feature])
+    # The room filter only applies where there are rooms to compare.
+    week_rooms, week_shown = None, ROOMS
+    if feature in ("temp", "hum"):
+        week_rooms = load_room_readings(week_df["date"].min(), week_df["date"].max())
+        week_shown = shown_rooms
+    week_chart = plot_week_overview(
+        week_df, feature, WEEK_FEATURES[feature], week_rooms, week_shown
+    )
     if week_chart is None:
         st.info("No measurements for this feature in the last 7 days.")
     else:
