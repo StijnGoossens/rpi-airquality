@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from config import BME280_HUM_OFFSET, DB_PATH, PI_ROOM, ZIGBEE_ROOMS
-from utils import baseline_deviation, smooth_steps
+from utils import baseline_deviation, gap_segments, smooth_steps
 
 NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
 EXPORT_TZ = ZoneInfo("Europe/Brussels")  # matches _normalize_dataframe's localisation
@@ -45,14 +45,16 @@ ROOM_LEGEND = alt.Legend(orient="top", title=None)
 
 
 def room_lines(rooms: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Each Zigbee room's readings for col with their steps smoothed; see smooth_steps."""
-    return pd.concat(
-        [
-            smooth_steps(readings.set_index("date")[col].dropna()).reset_index().assign(room=room)
-            for room, readings in rooms.groupby("room")
-        ],
-        ignore_index=True,
-    )
+    """Each Zigbee room's readings for col with their steps smoothed; see smooth_steps.
+
+    `segment` numbers the stretches between silences. Charts pass it as `detail`,
+    so each stretch is its own line and a silence shows as a gap.
+    """
+    lines = []
+    for room, readings in rooms.groupby("room"):
+        smooth = smooth_steps(readings.set_index("date")[col].dropna())
+        lines.append(smooth.reset_index().assign(room=room, segment=gap_segments(smooth)))
+    return pd.concat(lines, ignore_index=True)
 
 
 def room_scale(rooms) -> alt.Scale:
@@ -277,12 +279,17 @@ def plot_week_overview(
     if rooms is not None and not rooms.empty:
         smoothed = room_lines(rooms, col)
         smoothed = smoothed[smoothed["room"].isin(shown)]
+    else:
+        smoothed = pd.DataFrame()
+    # As in plot_rooms: a room layer without rows would blank the whole chart.
+    if not smoothed.empty:
         # The Pi's line is drawn above, but naming it here lets the legend explain the red.
         named = {*smoothed["room"], *([PI_ROOM] if show_pi else [])}
         chart += alt.Chart(smoothed).mark_line(strokeWidth=2).encode(
             x=x,
             y=y,
             color=alt.Color("room:N", scale=room_scale(named), legend=ROOM_LEGEND),
+            detail="segment:N",
             tooltip=["date:T", "room:N", alt.Tooltip(f"{col}:Q", format=".1f", title=label)],
         )
 
@@ -376,34 +383,46 @@ def plot_rooms(df, rooms, col, shown):
     """One line per shown room, the Pi's own included, with outdoor dashed gray as elsewhere."""
     # 15-minute means of the Pi's minute readings, on the same grid as the room lines.
     pi = df.set_index("date")[col].resample("15min").mean().dropna().reset_index()
-    lines = pd.concat([pi.assign(room=PI_ROOM), room_lines(rooms, col)], ignore_index=True)
+    parts = [pi.assign(room=PI_ROOM, segment=0)]
+    if not rooms.empty:  # a day from before the room sensors still gets the Pi's line
+        parts.append(room_lines(rooms, col))
+    lines = pd.concat(parts, ignore_index=True)
     lines = lines[lines["room"].isin(shown)]
     label = WEEK_FEATURES[col]
-    chart = (
-        alt.Chart(lines)
-        .mark_line()
-        .encode(
-            x=alt.X("date:T", axis=alt.Axis(title=None, format=time_axis_format(lines))),
-            y=alt.Y(f"{col}:Q", title=label, scale=alt.Scale(zero=False)),
-            color=alt.Color("room:N", scale=room_scale(lines["room"]), legend=ROOM_LEGEND),
-            tooltip=["date:T", "room:N", alt.Tooltip(f"{col}:Q", format=".1f", title=label)],
+    x = alt.X("date:T", axis=alt.Axis(title=None, format=time_axis_format(df)))
+    layers = []
+    # A room layer without rows blanks the whole chart (Vega: "Invalid array length"),
+    # so leave it out when every shown room is empty, e.g. only the Pi deselected on a
+    # day from before the room sensors.
+    if not lines.empty:
+        layers.append(
+            alt.Chart(lines)
+            .mark_line()
+            .encode(
+                x=x,
+                y=alt.Y(f"{col}:Q", title=label, scale=alt.Scale(zero=False)),
+                color=alt.Color("room:N", scale=room_scale(lines["room"]), legend=ROOM_LEGEND),
+                detail="segment:N",
+                tooltip=["date:T", "room:N", alt.Tooltip(f"{col}:Q", format=".1f", title=label)],
+            )
         )
-    )
     out_col = OUTDOOR_COLUMNS[col]
     if out_col in df.columns and df[out_col].notna().any():
         outdoor = (
             df.set_index("date")[out_col].resample("15min").mean().dropna().reset_index()
         )
-        chart += (
+        layers.append(
             alt.Chart(outdoor)
             .mark_line(color=OUTDOOR_COLOR, strokeDash=[5, 3])
             .encode(
-                x="date:T",
+                x=x,
                 y=alt.Y(f"{out_col}:Q", title=label, scale=alt.Scale(zero=False)),
                 tooltip=["date:T", alt.Tooltip(f"{out_col}:Q", format=".1f", title="Outdoor")],
             )
         )
-    return chart.properties(
+    if not layers:
+        return None
+    return alt.layer(*layers).properties(
         title=alt.TitleParams(
             "other rooms averaged over 1h, dashed gray = outdoor", fontSize=11, anchor="end"
         )
@@ -411,13 +430,12 @@ def plot_rooms(df, rooms, col, shown):
 
 
 def show_room_charts(df, cols, shown):
-    """Per-room charts for cols; False when there's no Zigbee data to chart."""
+    """Per-room charts for cols, honouring the Rooms picker."""
     rooms = load_room_readings(df["date"].min(), df["date"].max())
-    if rooms.empty:
-        return False
     for col in cols:
-        st.altair_chart(plot_rooms(df, rooms, col, shown), use_container_width=True)
-    return True
+        chart = plot_rooms(df, rooms, col, shown)
+        if chart is not None:  # nothing shown and no outdoor data to fall back on
+            st.altair_chart(chart, use_container_width=True)
 
 
 def plot_pm_over_time(df, domain=None):
@@ -546,21 +564,25 @@ now = pd.Timestamp.now(tz="Europe/Brussels")
 # Latest temperature and humidity per Zigbee room. A room silent for over 24h drops
 # off the cards; the daily summary has flagged it as silent long before that.
 room_readings = load_room_readings(now - pd.Timedelta(days=1), now)
-latest_rooms = room_readings.groupby("room").last() if not room_readings.empty else room_readings
 
 
 def room_extras(col: str, fmt: str, unit: str) -> list[str]:
+    if room_readings.empty:
+        return []
+    # Each room's last row that has this metric, so the age is that reading's own.
+    # A later row from another device in the room (a window contact, say) carries
+    # no temperature and must not make an old one look fresh.
+    latest = room_readings.dropna(subset=[col]).groupby("room").tail(1).sort_values("room")
     extras = []
-    for room, reading in latest_rooms.iterrows():
-        if pd.notna(reading[col]):
-            hours = int((now - reading["date"]) / pd.Timedelta(hours=1))
-            stale = f" ({hours}h ago)" if hours >= 2 else ""
-            extras.append(f"🏠 {room}: {reading[col]:{fmt}} {unit}{stale}")
+    for _, reading in latest.iterrows():
+        hours = int((now - reading["date"]) / pd.Timedelta(hours=1))
+        stale = f" ({hours}h ago)" if hours >= 2 else ""
+        extras.append(f"🏠 {reading['room']}: {reading[col]:{fmt}} {unit}{stale}")
     return extras
 
 
 # With other rooms on the cards, say which room the big numbers are from.
-where = f"  📍 {PI_ROOM}" if not latest_rooms.empty else ""
+where = f"  📍 {PI_ROOM}" if not room_readings.empty else ""
 st.text(f"🗓 {last_record['date'].strftime('%d-%m-%Y %H:%M')}{where}")
 age = now - last_record["date"]
 if age > pd.Timedelta(minutes=10):
@@ -632,9 +654,12 @@ if filtered_df.empty:
     st.info("No measurements recorded for the selected day yet.")
 else:
     st.altair_chart(plot_metric_over_time(filtered_df, "co2"), use_container_width=True)
-    # The per-room charts already include this room's line and outdoor, so they
-    # replace the single-room ones whenever there's Zigbee data for the window.
-    if not show_room_charts(filtered_df, ["temp", "hum"], shown_rooms):
+    # The per-room charts include this room's line and outdoor, so with Zigbee rooms
+    # configured they replace the single-room ones, even on a day without room
+    # readings: that keeps the Rooms picker working on every day.
+    if len(ROOMS) > 1:
+        show_room_charts(filtered_df, ["temp", "hum"], shown_rooms)
+    else:
         for col in ("temp", "hum"):
             st.altair_chart(plot_metric_over_time(filtered_df, col), use_container_width=True)
     st.altair_chart(

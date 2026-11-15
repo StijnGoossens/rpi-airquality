@@ -34,7 +34,7 @@ assert baseline_deviation(flat + [None] * 10 + [float("nan")] * 10, 120.0)[0] ==
 # 15.7 for 4 hours, then goes silent for 5 hours and comes back at 15.9.
 import pandas as pd  # noqa: E402 (only this check needs pandas)
 
-from utils import smooth_steps  # noqa: E402
+from utils import gap_segments, smooth_steps  # noqa: E402
 
 t0 = pd.Timestamp("2026-11-15 00:00", tz="Europe/Brussels")
 reports = pd.concat(
@@ -54,5 +54,9 @@ assert smooth[t0 + pd.Timedelta("6h")] == 15.7
 assert 15.5 < smooth[t0 + pd.Timedelta("4h")] < 15.7
 # A silence is a gap, not an invented steady reading.
 assert t0 + pd.Timedelta("10h") not in smooth.index
+# ...and the chart draws the two sides as separate lines, so it can't bridge the gap.
+segment = pd.Series(gap_segments(smooth), smooth.index)
+assert segment[: t0 + pd.Timedelta("8h")].eq(0).all()
+assert segment[t0 + pd.Timedelta("12h") :].eq(1).all()
 
 print("ok")

@@ -62,6 +62,17 @@ def smooth_steps(readings):
     return held.rolling("1h", center=True).mean().dropna()
 
 
+def gap_segments(smooth):
+    """Number the unbroken stretches of a smooth_steps result, 0, 1, 2, ...
+
+    A silence leaves a hole in its 15-minute grid. Drawing each stretch as its
+    own line makes that hole a visible gap, where a single line would bridge it
+    with a slope nobody measured.
+    """
+    gaps = smooth.index.to_series().diff().dt.total_seconds() > 15 * 60
+    return gaps.cumsum().to_numpy()
+
+
 def send_notification(title, message, priority="high", tags="warning"):
     if not NTFY_TOPIC:
         return
