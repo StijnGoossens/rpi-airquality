@@ -14,7 +14,7 @@ import sqlite3
 import time
 import urllib.request
 
-from config import DB_PATH, LATITUDE, LONGITUDE
+from config import DB_PATH, LATITUDE, LONGITUDE, ZIGBEE_ROOMS
 from utils import send_notification
 
 # CO2 is the Belgian indoor-air target value and sits in the EN 16798-1 Cat I band; it
@@ -36,6 +36,10 @@ GAP_MINUTES = 30
 # Mirrors monitor.POLL_FREQUENCY_SECONDS; not imported because monitor.py pulls in the
 # sensor libraries at module level and this script has to run without them.
 POLL_MINUTES = 5
+# Battery sensors report on change plus a periodic check-in, so a quiet room can go an
+# hour or so without a message. Lower this if a dead sensor gets noticed too late, raise
+# it if a healthy one gets reported.
+ZIGBEE_SILENT_HOURS = 6
 
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
@@ -184,7 +188,32 @@ def collect(now=None):
         "gaps": gaps,
         "streak": co2_streak(now),
         "readings": len(night),
+        "silent": silent_rooms(now),
     }
+
+
+def silent_rooms(now):
+    """(room, hours since its last reading) for each quiet Zigbee room; None = never seen.
+
+    ponytail: per room, so a chatty second device in a room would hide a dead one. Add a
+    device column to zigbee_records if a room ever gets more than one sensor.
+    """
+    if not ZIGBEE_ROOMS:
+        return []
+    try:
+        seen = dict(_query("SELECT room, MAX(date) FROM zigbee_records GROUP BY room"))
+    except sqlite3.OperationalError:
+        seen = {}  # The table only exists once zigbee_receiver.py has run.
+    silent = []
+    for room in sorted(set(ZIGBEE_ROOMS.values())):
+        hours = None
+        if room in seen:
+            age = now - datetime.datetime.fromisoformat(seen[room])
+            hours = age.total_seconds() / 3600
+            if hours <= ZIGBEE_SILENT_HOURS:
+                continue
+        silent.append((room, hours))
+    return silent
 
 
 def _shut_by(hourly, indoor_temp, now):
@@ -274,6 +303,12 @@ def render(s):
             problems.append("gap")
         lines.append(f"⚠️ No readings {start}–{end}")
 
+    for room, hours in s["silent"]:
+        if "sensor silent" not in problems:
+            problems.append("sensor silent")
+        since = "has never reported" if hours is None else f"silent for {hours:.0f}h"
+        lines.append(f"🔋 {room} {since} — battery or receiver?")
+
     footer = []
     if s["co2_peak"] is not None:
         footer.append(f"night CO2 max {s['co2_peak']:.0f}")
@@ -298,7 +333,7 @@ def demo():
         "vent": {"out": 14, "in": 22, "shut_by": "11:00"},
         "outdoor_pm25": 6, "indoor_temp": 21.8, "co2_peak": 812, "co2_peak_at": "05:10",
         "co2_hours": 0.0, "pm25_peak": 4.2, "pm25_peak_at": "19:00", "pm25_24h": 3.1,
-        "pm10_24h": 3.4, "gaps": [], "streak": 0, "readings": 108,
+        "pm10_24h": 3.4, "gaps": [], "streak": 0, "readings": 108, "silent": [],
     }
     title, body, tags = render(quiet)
     assert (title, tags) == ("Air: all clear", "green_circle"), (title, tags)
@@ -329,8 +364,14 @@ def demo():
     dead = dict(quiet, readings=0, co2_peak=None, pm25_peak=None)
     assert "no data" in render(dead)[0], render(dead)
 
+    # A sensor that stopped reporting is named, once it's silent or if it never spoke.
+    silent = dict(quiet, silent=[("attic", 9.4), ("cellar", None)])
+    title, body, tags = render(silent)
+    assert (title, tags) == ("Air: sensor silent", "orange_circle"), title
+    assert "attic silent for 9h" in body and "cellar has never reported" in body, body
+
     # Titles travel as HTTP headers: a non-latin-1 one silently loses the notification.
-    for stats in (quiet, bad, edge, offline, dead):
+    for stats in (quiet, bad, edge, offline, dead, silent):
         render(stats)[0].encode("latin-1")
     print("ok")
 

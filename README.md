@@ -310,7 +310,13 @@ For some reason a `tornado.iostream.StreamClosedError: Stream is closed` error m
 */5 * * * * sh $HOME/Documents/rpi-airquality/scripts/wifi_watchdog.sh >> $HOME/cronjoblog-wifi 2>&1
 */5 * * * * sh $HOME/Documents/rpi-airquality/scripts/monitor_watchdog.sh >> $HOME/cronjoblog-monitor 2>&1
 ```
-This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder. The last three lines are watchdogs, all checking every 5 minutes: `scripts/dashboard_watchdog.sh` restarts Streamlit if it crashed (e.g. the `StreamClosedError` issue above), `scripts/wifi_watchdog.sh` reconnects `wlan0` via `nmcli` if it dropped its IP (observed after a router hiccup or Pi reboot) — losing Wi-Fi also cuts off SSH access and the outdoor-weather API calls in `monitor.py` — and `scripts/monitor_watchdog.sh` restarts `monitor.py` itself, which had been the one process with no watchdog (it once stayed dead for 12.5 hours after a `database is locked` crash).
+This will start the monitoring script and Streamlit dashboard on startup. Logs (including the optional keep-alive ping) will be printed to the specified files under your home folder. The last three lines are watchdogs, all checking every 5 minutes: `scripts/dashboard_watchdog.sh` restarts Streamlit if it crashed (e.g. the `StreamClosedError` issue above), `scripts/wifi_watchdog.sh` reconnects `wlan0` via `nmcli` if it dropped its IP (observed after a router hiccup or Pi reboot), and reloads the `brcmfmac` Wi-Fi driver if `wlan0` is missing altogether (on a Pi 3B+ the chip's firmware download sometimes fails at boot with `Downloaded RAM image is corrupted`, and only a driver reload or power cut brings it back) — losing Wi-Fi also cuts off SSH access and the outdoor-weather API calls in `monitor.py` — and `scripts/monitor_watchdog.sh` restarts `monitor.py` itself, which had been the one process with no watchdog (it once stayed dead for 12.5 hours after a `database is locked` crash).
+
+Streamlit's memory use also grows over time: one process reached about 910 MB (RAM plus swap) after 72 days, up from about 130 MB after a fresh start. Restart it every night and let the watchdog start it again within 5 minutes:
+```
+2 4 * * * /usr/bin/pkill -f "bin/[s]treamlit"
+```
+The `[s]` keeps the pattern from matching the shell cron runs this line in (see the `pgrep -f` note below). If a bloated process has to be stopped by hand, use `kill -KILL`: on a normal stop it first pulls its swap back into memory, which left the Pi unresponsive for minutes.
 
 `monitor.py` opens the database in WAL mode with a 60-second busy timeout. In SQLite's default `journal_mode=delete` a reader blocks a writer, so a slow dashboard query — the CSV export scans all ~80k rows — could outlast the 5-second default timeout and kill the monitor with `sqlite3.OperationalError: database is locked`. WAL lets the dashboard read while the monitor writes. The mode is stored in the database file itself, so it survives restarts and applies to every connection.
 
@@ -339,6 +345,33 @@ The thresholds in `summary.py` are chosen from published guidance rather than fr
 | Outdoor PM2.5 gate | 15 µg/m³ | Suppresses the "air out now" advice rather than telling you to ventilate into worse air than the WHO guideline. |
 
 Note that WHO states there is no threshold below which PM2.5 is harmless, so these are action triggers, not safety lines. The peak and 24-hour checks are deliberately both present: a one-hour spike would need ~290 µg/m³ to drag a daily mean over 15, so short events are invisible to the 24h check, while a long mild haze breaches the guideline without ever tripping the peak.
+
+### Zigbee room sensors (optional)
+
+`src/zigbee_receiver.py` stores readings from battery-powered Zigbee sensors in other rooms, via [Zigbee2MQTT](https://www.zigbee2mqtt.io/) and a Mosquitto broker on the Pi. Each message becomes a row in the `zigbee_records` table of the same database: arrival time, room, temperature, humidity, battery, link quality and window contact.
+
+- Install the client tools the receiver reads from: `sudo apt install mosquitto mosquitto-clients`. No extra Python packages are needed.
+- In Zigbee2MQTT's `configuration.yaml`, turn off the replay of cached states on startup. Readings are timestamped on arrival, so a replay would store old values as new ones and make a dead sensor look alive:
+```yaml
+advanced:
+  cache_state_send_on_startup: false
+```
+- Run Zigbee2MQTT as a systemd service that starts at boot and comes back after a crash (`Restart=on-failure`, `RestartSec=30`), then `sudo systemctl enable zigbee2mqtt`. The receiver only listens, so while Zigbee2MQTT is down the rooms go silent. The delay also covers a boot where the USB stick appears after the service has started.
+- Map each Zigbee2MQTT device name to a room in the gitignored `src/location.py`, and optionally name the Pi's own room for the charts:
+```python
+ZIGBEE_ROOMS = {"living_sensor": "living room", "office_sensor": "office"}
+PI_ROOM = "bedroom"
+```
+- Add the watchdog to `crontab -e`. It also does the first start, so there is no `@reboot` line:
+```
+*/5 * * * * sh $HOME/Documents/rpi-airquality/scripts/zigbee_watchdog.sh >> $HOME/cronjoblog-zigbee 2>&1
+```
+
+The dashboard then lists each room's latest temperature and humidity on the cards and draws every room as its own line in the temperature and humidity charts, with a Rooms picker to hide some. The morning summary names any room in `ZIGBEE_ROOMS` that has been silent for more than `ZIGBEE_SILENT_HOURS` (6 hours by default, in `summary.py`). Check the message parsing with `python3 src/zigbee_receiver.py --demo`.
+
+### Calibrating the BME280 humidity
+
+If a side-by-side comparison shows the BME280's humidity is consistently off, set `BME280_HUM_OFFSET` (in percentage points, e.g. `4.0`) in `src/location.py`. The dashboard adds it when displaying the readings. The database and the CSV export keep the raw values, so the offset can be changed later and applies to the whole history.
 
 ### Weekly database backup to Google Drive
 - `sudo apt install rclone` on the Pi.

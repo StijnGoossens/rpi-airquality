@@ -20,3 +20,26 @@ try:
     from location import NTFY_TOPIC  # noqa: F811
 except ImportError:
     pass
+
+# Zigbee2MQTT device name -> room, e.g. {"living_sensor": "living room"}. Set in the
+# gitignored src/location.py. Devices not listed here are ignored by zigbee_receiver.py.
+ZIGBEE_ROOMS = {}
+try:
+    from location import ZIGBEE_ROOMS  # noqa: F811
+except ImportError:
+    pass
+
+# What to call the room the Pi itself stands in when charted next to the Zigbee rooms.
+PI_ROOM = "pi"
+try:
+    from location import PI_ROOM  # noqa: F811
+except ImportError:
+    pass
+
+# Added to the BME280 humidity (in percentage points) when displaying it, so a side-by-side
+# calibration can be applied or changed later: the database keeps the raw readings.
+BME280_HUM_OFFSET = 0.0
+try:
+    from location import BME280_HUM_OFFSET  # noqa: F811
+except ImportError:
+    pass
