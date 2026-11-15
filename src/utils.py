@@ -46,6 +46,22 @@ def baseline_deviation(history, current, mad_floor=MAD_FLOOR):
     return baseline, 0.6745 * (current - baseline) / max(mad, mad_floor)
 
 
+def smooth_steps(readings):
+    """Round the corners of a sensor that only reports in fixed steps.
+
+    The Zigbee room sensors send 0.2 °C or 1 % changes and repeat the value in
+    between, so their raw line is a staircase. Each reading holds until the next
+    one, then the held values are averaged over the hour around each point. The
+    result never leaves the range between two consecutive reported values and adds
+    no trend across a long plateau: only the corners soften, over half an hour
+    either side. A reading holds for at most 90 minutes, because the sensors
+    repeat themselves at least hourly and a longer silence is a gap, not a steady
+    room. `readings` is a pandas Series indexed by time.
+    """
+    held = readings.resample("15min").last().ffill(limit=6)
+    return held.rolling("1h", center=True).mean().dropna()
+
+
 def send_notification(title, message, priority="high", tags="warning"):
     if not NTFY_TOPIC:
         return

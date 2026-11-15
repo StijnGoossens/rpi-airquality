@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from config import BME280_HUM_OFFSET, DB_PATH, PI_ROOM, ZIGBEE_ROOMS
-from utils import baseline_deviation
+from utils import baseline_deviation, smooth_steps
 
 NIGHT_START, NIGHT_END = 22, 7  # night is 22:00 -> 07:00
 EXPORT_TZ = ZoneInfo("Europe/Brussels")  # matches _normalize_dataframe's localisation
@@ -42,6 +42,17 @@ ROOM_COLOR = {PI_ROOM: PI_COLOR} | {
 }
 # A one-row legend above the plot, instead of a column that narrows it.
 ROOM_LEGEND = alt.Legend(orient="top", title=None)
+
+
+def room_lines(rooms: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Each Zigbee room's readings for col with their steps smoothed; see smooth_steps."""
+    return pd.concat(
+        [
+            smooth_steps(readings.set_index("date")[col].dropna()).reset_index().assign(room=room)
+            for room, readings in rooms.groupby("room")
+        ],
+        ignore_index=True,
+    )
 
 
 def room_scale(rooms) -> alt.Scale:
@@ -264,18 +275,11 @@ def plot_week_overview(
     chart = bands + raw_line + hourly_line if show_pi else bands
 
     if rooms is not None and not rooms.empty:
-        room_hourly = (
-            rooms.set_index("date")
-            .groupby("room")[col]
-            .resample("1h")
-            .mean()
-            .dropna()
-            .reset_index()
-        )
-        room_hourly = room_hourly[room_hourly["room"].isin(shown)]
+        smoothed = room_lines(rooms, col)
+        smoothed = smoothed[smoothed["room"].isin(shown)]
         # The Pi's line is drawn above, but naming it here lets the legend explain the red.
-        named = {*room_hourly["room"], *([PI_ROOM] if show_pi else [])}
-        chart += alt.Chart(room_hourly).mark_line(strokeWidth=2).encode(
+        named = {*smoothed["room"], *([PI_ROOM] if show_pi else [])}
+        chart += alt.Chart(smoothed).mark_line(strokeWidth=2).encode(
             x=x,
             y=y,
             color=alt.Color("room:N", scale=room_scale(named), legend=ROOM_LEGEND),
@@ -370,19 +374,9 @@ def plot_metric_over_time(df, col, baseline=None):
 
 def plot_rooms(df, rooms, col, shown):
     """One line per shown room, the Pi's own included, with outdoor dashed gray as elsewhere."""
-    lines = pd.concat(
-        [df[["date", col]].assign(room=PI_ROOM), rooms[["date", "room", col]]]
-    ).dropna(subset=[col])
-    # The Zigbee sensors report on change, so 15-minute means put every room on one
-    # time grid and keep a week of data light in the browser.
-    lines = (
-        lines.set_index("date")
-        .groupby("room")[col]
-        .resample("15min")
-        .mean()
-        .dropna()
-        .reset_index()
-    )
+    # 15-minute means of the Pi's minute readings, on the same grid as the room lines.
+    pi = df.set_index("date")[col].resample("15min").mean().dropna().reset_index()
+    lines = pd.concat([pi.assign(room=PI_ROOM), room_lines(rooms, col)], ignore_index=True)
     lines = lines[lines["room"].isin(shown)]
     label = WEEK_FEATURES[col]
     chart = (
@@ -410,7 +404,9 @@ def plot_rooms(df, rooms, col, shown):
             )
         )
     return chart.properties(
-        title=alt.TitleParams("per room, dashed gray = outdoor", fontSize=11, anchor="end")
+        title=alt.TitleParams(
+            "other rooms averaged over 1h, dashed gray = outdoor", fontSize=11, anchor="end"
+        )
     )
 
 
@@ -685,6 +681,8 @@ else:
         caption = f"Shaded bands are nights, {NIGHT_START}:00-0{NIGHT_END}:00"
         if feature in OUTDOOR_COLUMNS:
             caption += " — dashed gray line is outdoor"
+        if week_rooms is not None and not week_rooms.empty:
+            caption += "\nOther rooms are averaged over 1h"
         st.text(caption)
         st.altair_chart(week_chart, use_container_width=True)
 
