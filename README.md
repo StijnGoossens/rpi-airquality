@@ -356,6 +356,7 @@ Note that WHO states there is no threshold below which PM2.5 is harmless, so the
 advanced:
   cache_state_send_on_startup: false
 ```
+- Run Zigbee2MQTT as a systemd service that starts at boot and comes back after a crash (`Restart=on-failure`, `RestartSec=30`), then `sudo systemctl enable zigbee2mqtt`. The receiver only listens, so while Zigbee2MQTT is down the rooms go silent. The delay also covers a boot where the USB stick appears after the service has started.
 - Map each Zigbee2MQTT device name to a room in the gitignored `src/location.py`, and optionally name the Pi's own room for the charts:
 ```python
 ZIGBEE_ROOMS = {"living_sensor": "living room", "office_sensor": "office"}
